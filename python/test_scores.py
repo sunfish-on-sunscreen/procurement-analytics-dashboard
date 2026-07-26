@@ -23,6 +23,7 @@ Run:   python python/test_scores.py        (standalone, prints a full report)
 Baseline CSV: $BASELINE_CSV or the default scratch path (skips if absent).
 """
 
+import copy
 import os
 import sys
 
@@ -31,6 +32,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scores  # noqa: E402
+import risk_config  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 # The two separated raw input files (the canonical upload format). Supplier
@@ -97,6 +99,60 @@ def test_concentration_curve():
     assert scores.concentration_0_100(4) == 10.0
     assert scores.concentration_0_100(5) == 0.0
     assert scores.concentration_0_100(9) == 0.0
+
+
+def test_risk_config_renorm_on_disable():
+    # Disabling a component redistributes its weight PROPORTIONALLY across the
+    # survivors so the effective weights still sum to 1.0. supplyRisk defaults are
+    # 0.50 / 0.25 / 0.25; dropping cost_premium (0.25) leaves 0.50 : 0.25 = 2 : 1,
+    # renormalized to 2/3 : 1/3.
+    sr = copy.deepcopy(risk_config.get_composite("supplyRisk"))
+    for c in sr["components"]:
+        if c["id"] == "cost_premium":
+            c["enabled"] = False
+    w = risk_config.resolve_effective_weights(sr)
+    assert "cost_premium" not in w
+    assert abs(w["supply_concentration"] - 2 / 3) < 1e-9
+    assert abs(w["import_friction"] - 1 / 3) < 1e-9
+    assert abs(sum(w.values()) - 1.0) < 1e-9
+
+
+def test_risk_config_all_disabled_raises():
+    # Guard: every component disabled -> a clear ValueError that names the composite
+    # (never zeros / NaN).
+    sr = copy.deepcopy(risk_config.get_composite("supplyRisk"))
+    for c in sr["components"]:
+        c["enabled"] = False
+    try:
+        risk_config.resolve_effective_weights(sr)
+        assert False, "expected ValueError when all components are disabled"
+    except ValueError as e:
+        assert "supplyRisk" in str(e)
+
+
+def test_risk_config_validate_weight_sum():
+    # Validation: declared weights not summing to 1.0 -> ValueError naming the
+    # composite AND reporting the actual sum (0.7 + 0.4 = 1.1).
+    pr = copy.deepcopy(risk_config.get_composite("performanceRisk"))
+    pr["components"][0]["weight"] = 0.7
+    total = sum(float(c["weight"]) for c in pr["components"])
+    try:
+        risk_config.validate_composite(pr)
+        assert False, "expected ValueError when weights do not sum to 1.0"
+    except ValueError as e:
+        msg = str(e)
+        assert "performanceRisk" in msg
+        assert repr(total) in msg  # the actual sum, exactly as the message reports it
+
+
+def test_risk_config_combine_score_polarity():
+    # invertPolarity=True applies the 100-minus (performance risk, higher=safer);
+    # invertPolarity=False leaves the penalty as-is (supply risk, higher=riskier).
+    assert abs(float(risk_config.combine_score(53.6, True)) - 46.4) < 1e-9
+    assert abs(float(risk_config.combine_score(53.6, False)) - 53.6) < 1e-9
+    # and it clips to [0, 100] on both ends
+    assert float(risk_config.combine_score(120.0, False)) == 100.0
+    assert float(risk_config.combine_score(-5.0, False)) == 0.0
 
 
 def test_roster_category_counts():

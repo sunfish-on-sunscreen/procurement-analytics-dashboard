@@ -39,6 +39,7 @@ from scipy.stats import mannwhitneyu, norm
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scores  # shared score engine (single source of truth for the 6 formulas)
+import risk_config  # config/risk-model.json weights for the two risk composites
 
 
 def log(msg):
@@ -1149,26 +1150,28 @@ RCEP_NON_ASEAN = {"JP", "KR", "CN", "AU", "NZ"}  # RCEP partners outside ASEAN
 
 
 def _import_friction_points(country):
-    """Import friction (0..25) by trade-agreement coverage. Complete + robust: any
-    unmapped / unknown / empty code falls through to the explicit safe default (25)
-    so this can never error or return None — it feeds the Kraljic supply-risk Y-axis.
-      ID                     -> 0   (domestic)
-      AFTA / ASEAN           -> 8
-      RCEP non-ASEAN         -> 16
-      everything else / unknown -> 25
+    """Import friction NORMALIZED to 0..100 by trade-agreement coverage. Complete +
+    robust: any unmapped / unknown / empty code falls through to the explicit safe
+    default (100) so this can never error or return None. The supplyRisk weight (0.25)
+    scales this back onto the component's 0..25 contribution (100*0.25 == the old
+    ceiling), so the emitted import_friction is unchanged: 0/8/16/25.
+      ID                        -> 0    (domestic)
+      AFTA / ASEAN              -> 32
+      RCEP non-ASEAN            -> 64
+      everything else / unknown -> 100
     """
     c = str(country).strip().upper()
     if c in ("ID", "IDN", "INDONESIA"):
         return 0.0
     if c in AFTA_CODES:
-        return 8.0
+        return 32.0
     if c in RCEP_NON_ASEAN:
-        return 16.0
-    return 25.0
+        return 64.0
+    return 100.0
 
 
 def _cost_premium_points(purchases):
-    """Period-scoped cost premium (0..25) per supplier, from Purchase prices.
+    """Period-scoped cost premium NORMALIZED to 0..100 per supplier, from Purchase prices.
 
     For each item, the benchmark is the spend-weighted average unit price across
     ALL suppliers selling it within the period (item_avg = sum(price*qty)/sum(qty)).
@@ -1176,9 +1179,12 @@ def _cost_premium_points(purchases):
     - 1, COUNTED only when that supplier x item has >= 2 POs (n=1 excluded as noise)
     AND the item has >= 2 suppliers (single-source items have no benchmark -> neutral).
     The supplier's overall premium is the spend-weighted average of its qualifying
-    item premiums (weight = the supplier's spend on each item); points =
-    clip(premium * 62.5, 0, 25) (+8% -> 5, +20% -> 12.5, +40%+ -> 25; at/below market
-    -> 0, never negative). Suppliers with no qualifying items -> 0 (returned absent).
+    item premiums (weight = the supplier's spend on each item); normalized points =
+    clip(premium * 250, 0, 100). The supplyRisk weight (0.25) scales this back onto the
+    old 0..25 contribution (0.25 * clip(premium*250,0,100) == clip(premium*62.5,0,25):
+    +8% -> 5, +20% -> 12.5, +40%+ -> 25; at/below market -> 0, never negative). Both the
+    factor 250/62.5 = 4 and 0.25 = 1/4 are powers of two, so the round-trip is exact.
+    Suppliers with no qualifying items -> 0 (returned absent).
     """
     if purchases is None or len(purchases) == 0:
         return {}
@@ -1215,7 +1221,7 @@ def _cost_premium_points(purchases):
         if wsum <= 0:
             continue
         prem = float((grp["premium"] * grp["spend"]).sum() / wsum)
-        out[sid] = float(np.clip(prem * 62.5, 0.0, 25.0))
+        out[sid] = float(np.clip(prem * 250.0, 0.0, 100.0))
     return out
 
 
@@ -1253,36 +1259,56 @@ def compute_supply_risk(purchases, suppliers, metrics):
         cat_size = df.groupby("category")["supplierExternalId"].transform("size")
         df["other_in_category"] = (cat_size - 1).astype(int)
 
-    # 1. supply concentration (0-50): step curve on the # of category alternatives,
-    #    merging single-source status + competition into one roster-derived measure.
-    #    0 other (true single source) -> 50, 1 -> 35, 2 -> 22, 3 -> 12, 4 -> 5, >=5 -> 0.
-    _CONC = {0: 50.0, 1: 35.0, 2: 22.0, 3: 12.0, 4: 5.0}
-    c_conc = df["other_in_category"].map(lambda o: _CONC.get(int(o), 0.0)).astype(float)
-    # 2. cost premium (0-25): period-scoped, benchmarked vs item spend-weighted avg.
-    #    Benchmarked at LINE grain (lock C) — the PO-grain EnrichedPurchase view
-    #    carries no per-item price, so read the window's PoLine frame, scoped to the
-    #    POs in THIS call's `purchases` subset. Falls back to the PO-grain frame only
-    #    if the line frame was never loaded (e.g. a direct unit-test call).
+    # Weights come from config/risk-model.json (supplyRisk). Each component is
+    # normalized to 0-100 below; the resolved weight scales it onto the old point
+    # ceiling (concentration 0.50->50, cost_premium 0.25->25, import_friction 0.25->25).
+    # With every component enabled and the declared weights summing to 1.0,
+    # resolve_effective_weights divides by exactly 1.0 (a bit-for-bit no-op), so each
+    # weighted contribution reproduces the old points and their sum reproduces the old
+    # supply_risk_score. All three scale factors (0.5, 0.25, x2, /4) are powers of two,
+    # so the round-trip is exact — no float drift.
+    _cfg = risk_config.get_composite("supplyRisk")
+    _w = risk_config.resolve_effective_weights(_cfg)  # THE shared renorm; guards all-disabled
+
+    # 1. supply concentration: normalized roster step curve {0:100,1:70,2:44,3:24,4:10,
+    #    >=5:0} (scores.concentration_0_100 — the SAME curve performanceRisk uses),
+    #    weighted. Merges single-source status + competition into one roster-derived
+    #    measure: 0 other (true single source) -> 100*0.50 = 50, ..., >=5 -> 0.
+    conc_norm = df["other_in_category"].map(lambda o: scores.concentration_0_100(int(o))).astype(float)
+    c_conc = _w.get("supply_concentration", 0.0) * conc_norm
+    # 2. cost premium: normalized clip(premium*250,0,100), period-scoped, benchmarked vs
+    #    item spend-weighted avg at LINE grain (lock C) — the PO-grain EnrichedPurchase
+    #    view carries no per-item price, so read the window's PoLine frame scoped to the
+    #    POs in THIS call's `purchases` subset. Falls back to the PO-grain frame only if
+    #    the line frame was never loaded (e.g. a direct unit-test call).
     if _PO_LINES is not None and "poId" in purchases.columns:
         po_ids = set(purchases["poId"].tolist())
         cost_input = _PO_LINES[_PO_LINES["poId"].isin(po_ids)]
     else:
         cost_input = purchases
     prem_map = _cost_premium_points(cost_input)
-    c_premium = df["supplierExternalId"].map(prem_map).fillna(0.0).astype(float)
-    # 3. import friction (0/8/16/25): Indonesia trade-agreement coverage.
-    c_friction = df["country"].apply(_import_friction_points).astype(float)
+    prem_norm = df["supplierExternalId"].map(prem_map).fillna(0.0).astype(float)
+    c_premium = _w.get("cost_premium", 0.0) * prem_norm
+    # 3. import friction: normalized {0,32,64,100} Indonesia trade-agreement coverage, weighted.
+    fric_norm = df["country"].apply(_import_friction_points).astype(float)
+    c_friction = _w.get("import_friction", 0.0) * fric_norm
 
-    risk = np.clip(c_conc.values + c_premium.values + c_friction.values, 0, 100)
+    # combine_score = THE shared polarity/clip fold. supplyRisk invertPolarity=false, so
+    # this is clip(sum, 0, 100) — a no-op since the weighted contributions still max at 100.
+    risk = risk_config.combine_score(
+        c_conc.values + c_premium.values + c_friction.values,
+        risk_config.invert_polarity(_cfg),
+    )
 
     risk_map = {sid: float(r) for sid, r in zip(df["supplierExternalId"], risk)}
     competition_map = {
         sid: int(o) for sid, o in zip(df["supplierExternalId"], df["other_in_category"])
     }
-    # Per-supplier breakdown of the three risk components (raw, unrounded). The
-    # supply-risk score is exactly their sum — the clip above is a no-op since the
-    # components max at 50 + 25 + 25 = 100 — so a 2dp display total reconciles with
-    # the 2dp component bars (see kraljic_analysis's emit).
+    # Per-supplier breakdown of the three WEIGHTED contributions (weight * normalized,
+    # unrounded) — numerically the old points (concentration 0-50, cost_premium 0-25,
+    # import_friction 0-25). The supply-risk score is exactly their sum — the clip above
+    # is a no-op since the contributions still max at 50 + 25 + 25 = 100 — so a 2dp
+    # display total reconciles with the 2dp component bars (see kraljic_analysis's emit).
     components_map = {
         sid: {
             "supply_concentration": float(cc),

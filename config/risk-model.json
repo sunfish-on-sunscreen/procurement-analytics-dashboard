@@ -1,0 +1,59 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the two risk composites. Extracted from python/compute_analyses.py (supplyRisk) and python/scores.py (performanceRisk) so the per-component point ceilings are now EXPLICIT normalized weights. Each component's response curve is normalized to 0-100 in code; the WEIGHT here scales it. For every component, weight * 100 == the old point ceiling (supply_concentration 0.50->50, cost_premium 0.25->25, import_friction 0.25->25; country_distance 0.60->60, roster_concentration 0.40->40). Weights per composite MUST sum to 1.0. invertPolarity=true applies the final 100-minus inversion (higher=safer). Consumed by python/risk_config.py (binding, Phase 1) and lib/risk-model.ts (types + loader for later phases). Do NOT change weights without re-recording every risk baseline in the same change.",
+  "composites": [
+    {
+      "id": "supplyRisk",
+      "label": "Supply risk (Kraljic Y-axis)",
+      "invertPolarity": false,
+      "components": [
+        {
+          "id": "supply_concentration",
+          "label": "Supply concentration",
+          "definition": "Step curve on the number of OTHER suppliers in the same category across the full roster (active or not); fewer alternatives -> higher risk. Normalized curve {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
+          "provenance": "lookup",
+          "enabled": true,
+          "weight": 0.50
+        },
+        {
+          "id": "cost_premium",
+          "label": "Cost premium",
+          "definition": "Spend-weighted item-price premium vs the cross-supplier benchmark, over supplier x item pairs with >=2 POs where the item has >=2 suppliers. Normalized clip(premium*250, 0, 100); at/below market -> 0.",
+          "provenance": "computed",
+          "enabled": true,
+          "weight": 0.25
+        },
+        {
+          "id": "import_friction",
+          "label": "Import friction",
+          "definition": "Indonesia trade-agreement coverage of the supplier's country. Normalized {domestic:0, AFTA:32, RCEP-non-ASEAN:64, other:100}.",
+          "provenance": "lookup",
+          "enabled": true,
+          "weight": 0.25
+        }
+      ]
+    },
+    {
+      "id": "performanceRisk",
+      "label": "Performance risk sub-score (composite input, higher=safer)",
+      "invertPolarity": true,
+      "components": [
+        {
+          "id": "country_distance",
+          "label": "Country distance",
+          "definition": "Geographic supply-distance tier of the supplier's country. 0-100 lookup {Indonesia:0, ASEAN:30, Asia-Pacific:60, other:100}.",
+          "provenance": "lookup",
+          "enabled": true,
+          "weight": 0.60
+        },
+        {
+          "id": "roster_concentration",
+          "label": "Roster concentration",
+          "definition": "Roster-based supply concentration (the SAME curve as supplyRisk.supply_concentration), on the 0-100 axis {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
+          "provenance": "lookup",
+          "enabled": true,
+          "weight": 0.40
+        }
+      ]
+    }
+  ]
+}

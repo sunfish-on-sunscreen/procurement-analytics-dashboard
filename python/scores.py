@@ -24,6 +24,8 @@ The Service dimension and single_source_risk were removed. All rounded to 2 dp.
 import numpy as np
 import pandas as pd
 
+import risk_config  # config/risk-model.json weights for the performanceRisk composite
+
 # Composite weights (Batch 3a spec).
 WEIGHTS = {
     "quality_score": 0.30,
@@ -185,18 +187,28 @@ def compute_scores(m: pd.DataFrame, roster_cat_counts: dict) -> pd.DataFrame:
     m["process_score"] = np.round([
         norm_high(r["three_way_match_pct"], 0, 100) for _, r in m.iterrows()
     ], 2)
+    # performanceRisk weights + polarity come from config/risk-model.json. Structural
+    # only — country distance + roster concentration, both already normalized to 0-100.
+    # invertPolarity=true applies the 100-minus (higher = safer). With both components
+    # enabled and 0.6 + 0.4 == 1.0, resolve_effective_weights divides by exactly 1.0 (a
+    # bit-for-bit no-op), so this reproduces 100 - (0.6*country + 0.4*concentration).
+    _cfg = risk_config.get_composite("performanceRisk")
+    _w = risk_config.resolve_effective_weights(_cfg)  # THE shared renorm; guards all-disabled
+    _invert = risk_config.invert_polarity(_cfg)
     new_risk = []
     for _, r in m.iterrows():
         country = country_distance_score(r.get("country", ""))
         # Roster-based concentration (same signal Kraljic uses): count OTHER
         # suppliers in the same category across the FULL roster; single-source
-        # (0 others) -> 100. Risk is structural only — country + concentration,
-        # re-weighted 0.6/0.4 after the complaint term was dropped.
+        # (0 others) -> 100.
         cat = str(r.get("category", ""))
         other_in_category = max(0, int(roster_cat_counts.get(cat, 1)) - 1)
         concentration = concentration_0_100(other_in_category)
-        risk = 100.0 - (0.6 * country + 0.4 * concentration)
-        new_risk.append(float(np.clip(risk, 0, 100)))
+        penalty = (
+            _w.get("country_distance", 0.0) * country
+            + _w.get("roster_concentration", 0.0) * concentration
+        )
+        new_risk.append(float(risk_config.combine_score(penalty, _invert)))
     m["risk_score"] = np.round(new_risk, 2)
     m["composite_score"] = np.round(
         sum(m[col] * w for col, w in WEIGHTS.items()), 2
