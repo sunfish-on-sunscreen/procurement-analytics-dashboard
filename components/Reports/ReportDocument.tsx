@@ -29,6 +29,7 @@ import {
 import type { ReportFocusData } from "@/lib/report-focus-types";
 import { buildClassificationAnomalies, buildAnomalyCrossref } from "@/lib/anomaly-crossref";
 import { deriveCycleFlags } from "@/lib/cycle-flags";
+import { RISK_MODEL_VERSION, RISK_MODEL_FINGERPRINT } from "@/lib/risk-model";
 import {
   renderCoverageAppendix,
   COVERAGE_METHOD_LABEL,
@@ -1235,6 +1236,7 @@ export function ReportDocument({
             )}
           </>
         )}
+          <ReportConfigStamp meta={meta} />
           </>
         )}
       </div>
@@ -1315,6 +1317,27 @@ function MethodologyBlock({ text }: { text: string }) {
         </p>
       </div>
     </BriefSection>
+  );
+}
+
+// Config provenance stamp — the frozen record on a printed focus report. Ties the
+// scores on the page to the exact risk-model configuration that produced them, so a
+// printout is reproducible from its version + content fingerprint.
+function ReportConfigStamp({ meta }: { meta: ReportMeta }) {
+  return (
+    <section className="mt-2 flex break-inside-avoid flex-col gap-1 border-t pt-3 text-xs text-muted-foreground">
+      <p>
+        Risk-model config{" "}
+        <span className="font-medium text-foreground">v{RISK_MODEL_VERSION}</span>{" "}
+        <span className="tabular-nums">({RISK_MODEL_FINGERPRINT})</span> &middot;
+        generated {generatedFmt.format(new Date(meta.generatedAt))}
+      </p>
+      <p>
+        The weights that produced these scores are an organisational configuration, not
+        fixed constants. This report is reproducible from the config version above; a
+        different configuration can move the quadrant and zone labels.
+      </p>
+    </section>
   );
 }
 
@@ -1457,6 +1480,7 @@ function SupplierBriefView({
       </BriefSection>
 
       {showMethodology && <MethodologyBlock text={methodologyText} />}
+      <ReportConfigStamp meta={meta} />
     </>
   );
 }
@@ -1533,6 +1557,7 @@ function CategoryDeepDiveView({
       </BriefSection>
 
       {showMethodology && <MethodologyBlock text={methodologyText} />}
+      <ReportConfigStamp meta={meta} />
     </>
   );
 }

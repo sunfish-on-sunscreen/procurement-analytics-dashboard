@@ -30,6 +30,8 @@ export interface RiskComposite {
 }
 
 export interface RiskModel {
+  /** Human-readable config version, stamped into every printed report. */
+  version: string;
   composites: RiskComposite[];
 }
 
@@ -37,6 +39,38 @@ export interface RiskModel {
 export const WEIGHT_SUM_TOL = 1e-9;
 
 export const RISK_MODEL: RiskModel = riskModelJson as unknown as RiskModel;
+
+/** Declared config version (from config/risk-model.json). */
+export const RISK_MODEL_VERSION: string = RISK_MODEL.version;
+
+// Deterministic canonical serialization (recursively key-sorted) so the fingerprint
+// depends only on the weights/enabled/polarity, never on key order or the JSON comment.
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${canonical(obj[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+// FNV-1a 32-bit hash — not cryptographic, just a stable content fingerprint so a
+// report's stamp changes iff a weight/enabled/polarity actually changed.
+function fnv1a(input: string): string {
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+/**
+ * Content fingerprint of the composites (weights + enabled + polarity), independent of
+ * the declared version. Two configs with the same weights share a fingerprint; changing
+ * any weight changes it — even if someone forgets to bump `version`.
+ */
+export const RISK_MODEL_FINGERPRINT: string = fnv1a(canonical(RISK_MODEL.composites));
 
 export function getComposite(id: RiskComposite["id"]): RiskComposite {
   const composite = RISK_MODEL.composites.find((c) => c.id === id);

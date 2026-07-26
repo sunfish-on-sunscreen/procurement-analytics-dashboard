@@ -482,59 +482,158 @@ export default async function MethodologyPage() {
             <p>
               ⚠️{" "}
               <strong className="text-foreground">
-                The dimensions follow a framework; the weights are an organisational
-                choice.
+                The dimensions follow a framework; the weights do not.
               </strong>{" "}
-              CIPS Supplier Performance Management and the APQC Process Classification
-              Framework name the KPI categories a scorecard should cover (order
-              fulfilment, delivery, quality, vendor risk, complaints) — but{" "}
+              The scoring dimensions come from <strong>Kraljic (1983)</strong> — the
+              exposure / supply-risk framework — and <strong>CIPS</strong>{" "}
+              supplier-scorecard guidance, which names the KPI categories a scorecard
+              should cover (order fulfilment, delivery, quality, vendor risk). Neither
+              prescribes weights, a scoring scale, or an aggregation formula;{" "}
               <strong>
-                CIPS prescribes the framework and dimension selection and leaves weight
-                calibration to the organisation
+                CIPS explicitly instructs the organisation to assign the weighting
+                itself
               </strong>
-              . No framework sets universal weights, and published industry examples
-              differ widely (40/30/20/10, 30/25/20/15/10, and others). The 30/30/22/18
-              split is a calibration choice reflecting mining priorities — operational
-              reliability dominant, audit compliance elevated — not a value any source
-              prescribes.
+              . The weights used here — 30/30/22/18 on the composite, and the component
+              weights inside each risk score — are therefore an{" "}
+              <strong>organisational calibration, not a citation</strong>. They reflect
+              mining priorities (operational reliability dominant, audit compliance
+              elevated); no published source prescribes them, and industry examples
+              differ widely (40/30/20/10, 30/25/20/15/10, and others).{" "}
+              <strong className="text-foreground">
+                The current values are defaults pending organisational input
+              </strong>{" "}
+              — held in one configuration file (<code>config/risk-model.json</code>), so
+              a recalibration is a settings change, not a code change. The formal
+              elicitation method for this problem, the{" "}
+              <strong>Analytic Hierarchy Process</strong> (Saaty, 1980), was{" "}
+              <strong>not used</strong>: it requires pairwise judgments from a domain
+              expert panel that was unavailable.
             </p>
             <p>
               <strong className="text-foreground">
                 Validation — weight-sensitivity analysis.
               </strong>{" "}
               Because the weights were not formally derived, they are validated the
-              recognised way: by <strong>perturbing them and testing whether the supplier
-              ranking holds</strong>. A drop-one test removes each dimension,
-              re-normalises the remaining three, and Spearman-correlates the resulting
-              ranking against the original. On the all-years live composite (55
-              suppliers, the default view),{" "}
+              recognised way: perturb them and measure what moves. A{" "}
+              <strong>drop-one</strong> test disables each component in turn,
+              renormalises the survivors, re-runs the real scoring code, and measures the
+              result <em>two</em> ways — the <strong>ranking</strong> and the{" "}
+              <strong>classification</strong>. They answer different questions and give
+              different answers.
+            </p>
+            <p>
+              <strong className="text-foreground">Ranking is robust.</strong>{" "}
+              Spearman-correlating the drop-one supplier ranking against the original, no
+              single weight reorders the portfolio materially: on the all-years composite
+              (55 suppliers, the default view) dropping Quality leaves it almost unchanged
+              (ρ = 0.97), Process 0.94, Delivery 0.86, and Risk moves it most (ρ = 0.72).{" "}
               <strong>
-                dropping Quality leaves the ranking almost unchanged (ρ = 0.97), Process
-                0.94, Delivery 0.86, and Risk moves it most (ρ = 0.72)
+                Every drop-one, in every window and on both risk scores, stays at or
+                above 0.72.
               </strong>{" "}
-              — every value a strong positive rank correlation, so no single weight
-              reorders the portfolio materially. ⚠️ Per Section 10.2 the exact figures
-              are grain-dependent: pooled over the per-period metric rows they are
-              Quality 0.97 / Process 0.91 / Delivery 0.82 / Risk 0.78, and in 2026 Risk
-              (0.84) and Delivery (0.83) swap the bottom two — but{" "}
+              (Quality is least influential at every grain; per Section 10.2 the figures
+              are grain-dependent. This is a different test from the delivery-score
+              half-weighting drop-one in Section 9.5, ρ = +0.727 / +0.794, which probes
+              the two inputs <em>inside</em> one sub-score.)
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-foreground">
+                    <th rowSpan={2} className="py-1.5 pr-3 text-left align-bottom font-medium">Window</th>
+                    <th colSpan={4} className="py-1.5 pr-3 text-center font-medium">Composite — drop dimension (ρ)</th>
+                    <th colSpan={3} className="py-1.5 text-center font-medium">Supply risk — drop component (ρ)</th>
+                  </tr>
+                  <tr className="border-b text-foreground">
+                    <th className="py-1.5 pr-3 text-right font-medium">Quality</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Delivery</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Process</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Risk</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Concentration</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Cost premium</th>
+                    <th className="py-1.5 text-right font-medium">Import friction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2024</td><td className="py-1.5 pr-3 text-right tabular-nums">0.98</td><td className="py-1.5 pr-3 text-right tabular-nums">0.82</td><td className="py-1.5 pr-3 text-right tabular-nums">0.87</td><td className="py-1.5 pr-3 text-right tabular-nums">0.77</td><td className="py-1.5 pr-3 text-right tabular-nums">0.80</td><td className="py-1.5 pr-3 text-right tabular-nums">0.93</td><td className="py-1.5 text-right tabular-nums">0.80</td></tr>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2025</td><td className="py-1.5 pr-3 text-right tabular-nums">0.95</td><td className="py-1.5 pr-3 text-right tabular-nums">0.82</td><td className="py-1.5 pr-3 text-right tabular-nums">0.92</td><td className="py-1.5 pr-3 text-right tabular-nums">0.73</td><td className="py-1.5 pr-3 text-right tabular-nums">0.82</td><td className="py-1.5 pr-3 text-right tabular-nums">0.93</td><td className="py-1.5 text-right tabular-nums">0.80</td></tr>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2026</td><td className="py-1.5 pr-3 text-right tabular-nums">0.98</td><td className="py-1.5 pr-3 text-right tabular-nums">0.83</td><td className="py-1.5 pr-3 text-right tabular-nums">0.94</td><td className="py-1.5 pr-3 text-right tabular-nums">0.84</td><td className="py-1.5 pr-3 text-right tabular-nums">0.86</td><td className="py-1.5 pr-3 text-right tabular-nums">0.91</td><td className="py-1.5 text-right tabular-nums">0.80</td></tr>
+                  <tr><td className="py-1.5 pr-3 font-medium text-foreground">All years</td><td className="py-1.5 pr-3 text-right tabular-nums">0.97</td><td className="py-1.5 pr-3 text-right tabular-nums">0.86</td><td className="py-1.5 pr-3 text-right tabular-nums">0.94</td><td className="py-1.5 pr-3 text-right font-medium tabular-nums text-foreground">0.72</td><td className="py-1.5 pr-3 text-right tabular-nums">0.84</td><td className="py-1.5 pr-3 text-right tabular-nums">0.92</td><td className="py-1.5 text-right tabular-nums">0.81</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              <strong className="text-foreground">Classification is not robust.</strong>{" "}
+              The same perturbation moves a large share of suppliers across a decision
+              boundary. Dropping Risk from the composite flips{" "}
+              <strong>36.4% of performance zones</strong> on the all-years view; dropping
+              a single supply-risk component moves <strong>6–28% of Kraljic quadrants</strong>,
+              depending on the window and the component.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-foreground">
+                    <th rowSpan={2} className="py-1.5 pr-3 text-left align-bottom font-medium">Window</th>
+                    <th colSpan={4} className="py-1.5 pr-3 text-center font-medium">Composite — % zone change</th>
+                    <th colSpan={3} className="py-1.5 text-center font-medium">Supply risk — % Kraljic quadrant change</th>
+                  </tr>
+                  <tr className="border-b text-foreground">
+                    <th className="py-1.5 pr-3 text-right font-medium">Quality</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Delivery</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Process</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Risk</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Concentration</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Cost premium</th>
+                    <th className="py-1.5 text-right font-medium">Import friction</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2024</td><td className="py-1.5 pr-3 text-right tabular-nums">0.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">16.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">12.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">28.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">28.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">16.0%</td><td className="py-1.5 text-right tabular-nums">18.0%</td></tr>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2025</td><td className="py-1.5 pr-3 text-right tabular-nums">3.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">3.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">3.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">31.4%</td><td className="py-1.5 pr-3 text-right tabular-nums">19.6%</td><td className="py-1.5 pr-3 text-right tabular-nums">21.6%</td><td className="py-1.5 text-right tabular-nums">21.6%</td></tr>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2026</td><td className="py-1.5 pr-3 text-right tabular-nums">4.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">8.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">8.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">28.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">6.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">26.0%</td><td className="py-1.5 text-right tabular-nums">26.0%</td></tr>
+                  <tr><td className="py-1.5 pr-3 font-medium text-foreground">All years</td><td className="py-1.5 pr-3 text-right tabular-nums">3.6%</td><td className="py-1.5 pr-3 text-right tabular-nums">10.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">7.3%</td><td className="py-1.5 pr-3 text-right font-medium tabular-nums text-foreground">36.4%</td><td className="py-1.5 pr-3 text-right tabular-nums">18.2%</td><td className="py-1.5 pr-3 text-right tabular-nums">14.5%</td><td className="py-1.5 text-right tabular-nums">18.2%</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              <strong className="text-foreground">Why the two disagree.</strong> Every
+              decision surface here is a <strong>median split</strong> — the Kraljic
+              quadrant on the supply-risk median, the performance zone on the composite
+              median. A supplier sitting near the line changes its label on a small score
+              shift, even when the overall ordering barely moves. This is a mathematical
+              consequence of the cut-point choice, not a defect in the scores.
+            </p>
+            <p>
+              <strong className="text-foreground">How to read this.</strong> The{" "}
+              <em>ranking</em> is safe to use for prioritisation — it holds under any of
+              these weight choices. The{" "}
               <strong>
-                Quality is the least influential weight at every grain and Process
-                second
+                quadrant and zone labels should be read as indicative, not as hard
+                categories
               </strong>
-              , and every drop-one stays above 0.72. This is a{" "}
-              <em>different</em> test from the delivery-score half-weighting drop-one in
-              Section 9.5 (ρ = +0.727 / +0.794), which probes the two inputs{" "}
-              <em>inside</em> one sub-score, not the four composite weights.
+              : a supplier near a boundary can land on either side under a defensible
+              reweighting. This is also why the weights are configurable rather than
+              fixed — the labels are genuinely sensitive to the weight choice, so the
+              choice belongs to the organisation, not to the code.
+            </p>
+            <p>
+              <strong className="text-foreground">Access and provenance.</strong> Weight
+              configuration is unrestricted: the project has no role system, so any user
+              who can reach this page can change the weights, and nothing records who
+              changed a weight or when. Because the labels move with the weights, the
+              configuration that produced a given result matters — and the{" "}
+              <strong>printed report is the only record of it</strong>. Every printed
+              supplier brief and category deep-dive is stamped in its footer with the
+              active config version and generation date, so a printout is reproducible
+              from its stamp.
             </p>
             <p className="text-xs">
-              The formal alternative not used is the{" "}
-              <strong>Analytic Hierarchy Process</strong> (Saaty, 1980): pairwise
-              comparison of the dimensions on a 9-point scale, weights read from the
-              priority (eigenvector) of the comparison matrix, accepted when the
-              consistency ratio is below 0.1. AHP requires an expert panel to fill the
-              pairwise matrix — a domain input this project does not have — so the weights
-              are set by transparent calibration and validated by the sensitivity
-              analysis above instead.
+              For reference, AHP derives weights from pairwise comparisons of the
+              dimensions on a 9-point scale — the weights are the priority (eigenvector)
+              of the comparison matrix, accepted when its consistency ratio is below 0.1.
+              That matrix needs an expert panel to fill it, which is the input this
+              project does not have.
             </p>
           </section>
 
@@ -554,6 +653,38 @@ export default async function MethodologyPage() {
               roster (true single source → 100, ≥5 alternatives → 0) — the same roster
               signal the Kraljic supply-risk axis uses. The score is fully deterministic,
               with no random component.
+            </p>
+            <p>
+              <strong className="text-foreground">
+                What the Risk sub-score measures — and does not.
+              </strong>{" "}
+              Both components are <strong>static lookups</strong>:{" "}
+              <code>country_distance</code> is keyed on the supplier&rsquo;s country,{" "}
+              <code>roster_concentration</code> on the purchase category. Neither is
+              derived from transaction behaviour. The Risk dimension therefore reflects{" "}
+              <strong>
+                properties of what is bought and from where, not supplier conduct
+              </strong>{" "}
+              — two suppliers in the same category and country receive an identical risk
+              contribution regardless of their delivery, quality, or process record.
+            </p>
+            <p>
+              The sub-score is carried almost entirely by geography. In the drop-one test
+              (Section 4.2), dropping <code>country_distance</code> collapses the
+              risk_score ranking to Spearman <strong>0.56–0.61</strong> and flips{" "}
+              <strong>22–27% of performance zones</strong>; dropping{" "}
+              <code>roster_concentration</code> leaves ρ ≈ 0.89 and moves ≤8% of zones.{" "}
+              <code>country_distance</code> alone carries the sub-score.
+            </p>
+            <p>
+              By contrast the <strong>Kraljic supply-risk score</strong> (Section 3.2)
+              adds one <em>computed</em> component, <code>cost_premium</code>,
+              benchmarked from actual purchase prices — and it shows: the distinct
+              supply_risk_score values per period (<strong>32 / 33 / 27</strong>)
+              outnumber the distinct (category, country) pairs (<strong>29</strong>), so
+              the Kraljic score does discriminate between two suppliers in the same
+              category and country. The composite Risk sub-score, built only from lookups,
+              cannot.
             </p>
             <p className="text-xs">
               Note: this composite <strong>Risk sub-score</strong> is distinct from the{" "}
