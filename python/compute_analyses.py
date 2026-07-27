@@ -12,9 +12,11 @@ Two modes:
       ⚠️ SEVEN keys. This list is the de-facto contract for lib/range-analyses.ts
       RANGE_TYPES — keep them in step when adding an analysis.
 
-Data is filtered by Purchase payment date — COALESCE(paymentDate, prDate) — so a
-period's compute covers exactly the rows tagged to it at import. Suppliers and
-metrics are derived from the suppliers that appear in the filtered purchases.
+Data is filtered by PurchaseOrder ORDER DATE (poDate) — the same basis a PO's period
+is tagged by — so a period's compute covers exactly the rows tagged to it. (This was
+payment date, COALESCE(paymentDate, prDate), before the normalized-data migration.)
+Suppliers and metrics are derived from the suppliers that appear in the filtered
+purchases.
 Progress logs go to STDERR so Mode B's stdout stays pure JSON.
 
 Methodology is FIXED (ABC 80/95, Mann-Whitney U, Kraljic median split) per scope.

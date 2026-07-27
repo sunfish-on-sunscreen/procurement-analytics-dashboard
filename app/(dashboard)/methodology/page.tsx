@@ -215,12 +215,21 @@ export default async function MethodologyPage() {
         </CardContent>
       </Card>
 
-      {/* 3. The Four Analyses */}
+      {/* 3. The Analyses */}
       <Card className={cardElevation}>
         <CardHeader>
-          <CardTitle>3. The Four Analyses</CardTitle>
+          <CardTitle>3. The Analyses</CardTitle>
         </CardHeader>
         <CardContent className="space-y-6 text-sm leading-relaxed text-muted-foreground">
+          <p>
+            The dashboard computes <strong>seven analysis types</strong>. The four
+            diagnostic analyses are documented in this section — ABC / Pareto (3.1), the
+            Kraljic exposure matrix (3.2), performance vs spend (3.3), and process /
+            cycle time (3.4) — alongside spend overview, the descriptive spend base they
+            draw on. The remaining two are documented separately:{" "}
+            <strong>action recommendations</strong> (Section 6) and{" "}
+            <strong>competitive sourcing coverage</strong> (Section 9).
+          </p>
           <section className="space-y-2">
             <h3 className="text-base font-semibold text-foreground">
               3.1 ABC / Pareto Analysis
@@ -311,6 +320,22 @@ export default async function MethodologyPage() {
                 else / unknown → <code>25</code> (explicit safe default).
               </li>
             </ul>
+            <p className="text-xs">
+              ⚠️ <strong className="text-foreground">Two scales, one number.</strong>{" "}
+              The point values above (concentration ≤50, cost premium{" "}
+              <code>clip(premium × 62.5, 0, 25)</code>) are what the score{" "}
+              <em>emits</em> — the values plotted on the scatter and shown in the detail
+              panels. Since Phase 1 (Section 4.2a) the components are computed
+              internally on a normalized 0–100 scale and multiplied by an explicit
+              weight (concentration <code>{"{0:100, 1:70, 2:44, 3:24, 4:10, ≥5:0}"}</code>{" "}
+              × 0.50; cost premium <code>clip(premium × 250, 0, 100)</code> × 0.25). The
+              emitted contribution is unchanged and{" "}
+              <strong>byte-identical</strong>: 0.25 ×{" "}
+              <code>clip(premium × 250, 0, 100)</code> is identically{" "}
+              <code>clip(premium × 62.5, 0, 25)</code>, and 0.50 × the normalized rungs
+              gives back 50 / 35 / 22 / 12 / 5 / 0. The two formulas describe the same
+              value on different scales.
+            </p>
             <p className="text-xs">
               The dataset is synthetic; prices, origins, and category structure are
               patterned on Indonesian mining procurement — informed by benchmarks, not
@@ -641,9 +666,12 @@ export default async function MethodologyPage() {
               (55 suppliers, the default view) dropping Quality leaves it almost unchanged
               (ρ = 0.97), Process 0.94, Delivery 0.86, and Risk moves it most (ρ = 0.72).{" "}
               <strong>
-                Every drop-one, in every window and on both risk scores, stays at or
-                above 0.72.
+                Every drop-one shown here — the four composite dimensions and the three
+                supply-risk components, in every window — stays at or above 0.72.
               </strong>{" "}
+              The performance-risk sub-score&apos;s own two internals are the one
+              exception, treated in Section 4.3: dropping <code>country_distance</code>
+              takes that ranking down to ρ = 0.56–0.61.{" "}
               (Quality is least influential at every grain; per Section 10.2 the figures
               are grain-dependent. This is a different test from the delivery-score
               half-weighting drop-one in Section 9.5, ρ = +0.727 / +0.794, which probes
@@ -760,7 +788,9 @@ export default async function MethodologyPage() {
               a component saves a new config version and recomputes every period; the
               report footer then stamps that version, so a printed result stays traceable
               to the configuration that produced it. Every value is a default pending
-              organisational input.
+              organisational input. Each component is scored on a normalized 0–100 scale
+              and multiplied by its weight; the emitted point values stay on the original
+              scale and are byte-identical (see the reconciliation note in Section 3.2).
             </p>
             <RiskModelSettings
               initialModel={riskModel}
@@ -1023,7 +1053,7 @@ export default async function MethodologyPage() {
           <section className="space-y-2">
             <h4 className="text-sm font-semibold text-foreground">Reports</h4>
             <p>
-              The <strong>Reports</strong> view composes the four analyses and their
+              The <strong>Reports</strong> view composes the analyses and their
               recommendations into a decision-first document — headline finding →
               situation → ranked findings → an action table — rather than a dump of
               every table. It offers three tone registers (executive, operational,
@@ -1043,10 +1073,13 @@ export default async function MethodologyPage() {
         <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
           <ul className="list-disc space-y-1 pl-5">
             <li>
-              Periods are <strong>auto-detected</strong> from the data — one period
-              per distinct year found in the <code>payment_date</code> values (with a{" "}
-              <code>pr_date</code> fallback for any record missing a payment). This
-              payment-date basis is what surfaces the 2026 period.
+              Periods are <strong>auto-detected</strong> from the data — one period per
+              distinct <strong>order year</strong> present in the purchase orders. This
+              is the same <code>poDate</code> order-year basis a PO is tagged and
+              filtered by (Section 2.1): period discovery and period assignment use the
+              one basis, so an order never lands in a window it was not counted in. (The
+              earlier payment-date basis predates the normalized-data migration.) The
+              2026 order year is what surfaces the 2026 period.
             </li>
             <li>
               <strong>Single Year</strong> mode shows the analyses for one year,
@@ -1275,16 +1308,70 @@ export default async function MethodologyPage() {
                 a real system would apply daily FX rates.
               </li>
               <li>
-                The methodology is <strong>fixed and not user-adjustable</strong> —
-                ABC at 80% / 95%, median splits on both classification matrices, the
-                longest-cycle cut, the 8-day slow-stage flag, and the Mann-Whitney U
-                comparison are all constants. There are no parameter sliders.
+                The <em>analytical thresholds</em> are{" "}
+                <strong>fixed and not user-adjustable</strong> — ABC at 80% / 95%, the
+                median splits on both classification matrices, the longest-cycle cut,
+                the 8-day slow-stage flag, and the Mann-Whitney U comparison are all
+                constants. The <em>risk-model weights</em> are the one exception: the
+                supply-risk and performance-risk component weights, and each
+                component&apos;s enable/disable, are configurable — see Section 4.2a. No
+                other parameter is adjustable.
               </li>
               <li>
                 The process structure reflects Indonesian government procurement
                 regulation (<strong>Perpres 12/2021</strong>).
               </li>
             </ul>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">
+              8.6 Corrections carried forward
+            </h3>
+            <p>
+              Two cross-cutting inference errors were made and corrected on this
+              project. Following the standard set in Section 9.5, they are recorded so
+              they are not revived. Both are hazards of reading <em>across</em> the data
+              rather than properties of one analysis, so they sit here rather than
+              inside a single analysis section; they will move when this page is
+              restructured.
+            </p>
+            <p>
+              <strong className="text-foreground">
+                Simpson&apos;s paradox in the cycle-time trend.
+              </strong>{" "}
+              Total cycle is a mixture of five buying methods (median roughly 44 days for
+              spot buys up to ~130 for direct orders), so a shift in the method mix can
+              move the pooled mean opposite to how the methods themselves moved. From
+              2024 to 2025 the pooled mean was essentially flat (87.0 → 87.24 days,
+              +0.3%) while <strong>all five methods slowed</strong> (within-method effect
+              +4.96 days: call-off +5.66, direct +6.39, RFQ +4.50, spot buy +4.18, tender
+              +4.43) — the slowdown masked by a mix shift toward faster channels (−4.73).
+              From 2025 to 2026 the pooled mean rose (87.24 → 89.26, +2.3%, reading as a
+              worsening) while <strong>four of the five improved</strong> (within-method
+              effect −3.56 days: RFQ −10.58, tender −2.45, call-off −1.51, spot buy
+              −1.39, direct +0.22 essentially flat) — the rise driven entirely by a mix
+              shift toward slower channels (+5.58). The fix is the shift-share
+              (mix-adjusted) decomposition now shown on the Process Health trend, which
+              reports the mix and within-method effects separately and flags the pooled
+              figure as misleading.
+            </p>
+            <p>
+              <strong className="text-foreground">
+                Selection bias in the period comparison.
+              </strong>{" "}
+              The within-window period comparison split the window at its midpoint by{" "}
+              <code>payment</code> date, while the window itself is scoped by{" "}
+              <code>order</code> date. Because an order can only be <em>paid</em> in the
+              first half if its cycle was short, the early group was selected for speed
+              by construction — manufacturing a highly significant &ldquo;worsening&rdquo;
+              in all three windows (2024 <em>p</em> = 0.0002, 2025 <em>p</em> = 0.0001,
+              2026 <em>p</em> = 5 × 10⁻¹⁰) and silently dropping the orders paid outside
+              the window (32 in 2024, 38 in 2025). Splitting on order date — the same
+              basis the window uses — makes the effect vanish (2024 <em>p</em> = 0.386,
+              2025 <em>p</em> = 0.246, both null; 2026 has no second group) and drops no
+              rows.
+            </p>
           </section>
         </CardContent>
       </Card>
@@ -2024,8 +2111,24 @@ export default async function MethodologyPage() {
             <li>Hackett Group — P2P Automation Benefits Research.</li>
             <li>MOPS Singapore — Mean of Platts Singapore (fuel benchmarks).</li>
             <li>AME Group — Mining cost reports.</li>
+            <li>
+              Kraljic, P. (1983) — &ldquo;Purchasing must become supply
+              management,&rdquo; Harvard Business Review (the Kraljic matrix).
+            </li>
+            <li>
+              Saaty, T. L. (1980) — The Analytic Hierarchy Process (AHP weight
+              elicitation).
+            </li>
             <li>Juran, J. M. (1951) — Quality Control Handbook (Pareto principle).</li>
             <li>Mann, H. B. &amp; Whitney, D. R. (1947) — Mann-Whitney U test.</li>
+            <li>
+              Cohen, J. (1988) — Statistical Power Analysis for the Behavioral Sciences
+              (effect-size interpretation).
+            </li>
+            <li>
+              Tukey, J. W. (1977) — Exploratory Data Analysis (the 1.5× IQR outlier
+              fence).
+            </li>
             <li>Perpres 12/2021 — Indonesian government procurement regulation.</li>
           </ul>
         </CardContent>
