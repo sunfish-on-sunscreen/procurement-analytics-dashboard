@@ -53,58 +53,165 @@ export default async function MethodologyPage() {
             into three fixed, defensible analyses.
           </p>
           <p>
-            The underlying data is synthetic, but it is calibrated against
-            published industry benchmarks so that the patterns (spend skew, cycle
-            times, quality distributions) are realistic and the analytical methods
-            can be demonstrated meaningfully.
+            The underlying data is synthetic. Its generator parameters were informed
+            by published industry benchmarks, so the broad patterns (spend skew, cycle
+            times, quality distributions) are plausible enough to demonstrate the
+            analytical methods — but the generated distributions have not been verified
+            against those benchmarks (see Section 11).
           </p>
         </CardContent>
       </Card>
 
-      {/* 2. Data Sources */}
+      {/* 2. Data Provenance & Scope */}
       <Card className={cardElevation}>
         <CardHeader>
-          <CardTitle>2. Data Sources</CardTitle>
+          <CardTitle>2. Data Provenance &amp; Scope</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
-          <div className="rounded-md border-l-4 border-primary bg-muted/50 p-3 font-medium text-foreground">
-            This dashboard uses synthetic data generated for demonstration
-            purposes. The data has been calibrated against industry benchmarks for
-            realism.
-          </div>
-          <p>The calibration sources are:</p>
-          <ul className="list-disc space-y-1 pl-5">
-            <li>
-              <strong>APQC Open Standards Benchmarking</strong> — procure-to-pay
-              cycle times.
-            </li>
-            <li>
-              <strong>Hackett Group P2P automation case studies</strong> —
-              automation impact metrics.
-            </li>
-            <li>
-              <strong>CIPS Knowledge Hub supplier scorecard methodology</strong> —
-              the supplier-KPI categories (quality, delivery, risk). CIPS names the
-              categories; it prescribes no weights (see Section 4.2).
-            </li>
-            <li>
-              <strong>MOPS Singapore</strong> (Mean of Platts Singapore) — fuel
-              pricing benchmarks.
-            </li>
-            <li>
-              <strong>AME mining cost reports</strong> — commodity pricing
-              reference.
-            </li>
-          </ul>
-          <p>
-            The dataset was originally generated externally (the generator is
-            not in this repository). The import path takes{" "}
-            <strong>raw operational measurements only</strong>; every scorecard
-            value is then <strong>computed server-side at import</strong> by{" "}
-            <code>python/scores.py</code>, deterministically, so each stored score
-            is reproducible from the underlying records. A full from-scratch
-            generator is planned for a future phase.
-          </p>
+        <CardContent className="space-y-6 text-sm leading-relaxed text-muted-foreground">
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">
+              2.1 Population and scope
+            </h3>
+            <p>
+              The dashboard covers <strong>647 purchase orders</strong> from{" "}
+              <strong>55 suppliers</strong> across <strong>14 categories</strong> and 9
+              supplier countries, totalling <strong>$707,687,316.20</strong> in spend.
+              A purchase order is tagged to a reporting period by its{" "}
+              <strong>order year</strong>.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-left text-foreground">
+                    <th className="py-1.5 pr-3 font-medium">Window</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Purchase orders</th>
+                    <th className="py-1.5 pr-3 text-right font-medium">Spend</th>
+                    <th className="py-1.5 text-right font-medium">Suppliers scored</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2024</td><td className="py-1.5 pr-3 text-right tabular-nums">240</td><td className="py-1.5 pr-3 text-right tabular-nums">$248.99M</td><td className="py-1.5 text-right tabular-nums">50</td></tr>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2025</td><td className="py-1.5 pr-3 text-right tabular-nums">250</td><td className="py-1.5 pr-3 text-right tabular-nums">$277.33M</td><td className="py-1.5 text-right tabular-nums">51</td></tr>
+                  <tr className="border-b"><td className="py-1.5 pr-3">2026</td><td className="py-1.5 pr-3 text-right tabular-nums">157</td><td className="py-1.5 pr-3 text-right tabular-nums">$181.37M</td><td className="py-1.5 text-right tabular-nums">50</td></tr>
+                  <tr><td className="py-1.5 pr-3 font-medium text-foreground">Range (all years, default)</td><td className="py-1.5 pr-3 text-right font-medium tabular-nums text-foreground">647</td><td className="py-1.5 pr-3 text-right font-medium tabular-nums text-foreground">$707.69M</td><td className="py-1.5 text-right font-medium tabular-nums text-foreground">55</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>
+              The default view is <strong>Range</strong> (all three years). A supplier is{" "}
+              <strong>
+                scored only if it has at least one purchase order in the selected window
+              </strong>
+              , so a single year scores <strong>50, 51, and 50</strong> suppliers
+              respectively — fewer than the full <strong>55-supplier roster</strong>,
+              which the Range view scores in full. The roster is constant; the scored
+              count is window-dependent.
+            </p>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">
+              2.2 Data structure
+            </h3>
+            <p>
+              The records are a <strong>normalized 12-table document model</strong>, not
+              a flat table — one row per real document, linked into the procure-to-pay
+              chain:
+            </p>
+            <p className="rounded-md bg-muted/50 p-2 text-xs">
+              Requisition → Sourcing event + Responses (competitively sourced methods
+              only) → Purchase order + PO lines → Goods receipt(s) + GRN lines → Invoice
+              + Invoice lines → Payment; a call-off instead draws against a Framework
+              agreement.
+            </p>
+            <p>
+              Row counts: 55 suppliers · 21 frameworks · 647 requisitions · 226 sourcing
+              events · 677 responses · 647 purchase orders · 1,193 PO lines · 829 goods
+              receipts · 1,508 GRN lines · 647 invoices · 1,193 invoice lines · 647
+              payments. A PO-grain view (<code>EnrichedPurchase</code>) reconstructs one
+              row per order from this chain; item-level detail is read from the line
+              tables.
+            </p>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">
+              2.3 Key definitions
+            </h3>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <strong>Three-way match</strong> — per PO line, the invoice reconciles
+                with the PO and the receipt with no overpay:{" "}
+                <strong>billed quantity == accepted quantity</strong> (accepted =
+                received − rejected) AND{" "}
+                <strong>invoice unit price == PO unit price</strong>. It tests billing
+                integrity, <em>not</em> whether everything ordered arrived — a
+                correctly-billed partial delivery <strong>passes</strong>. On this data,
+                566 of 647 orders pass and 81 fail.
+              </li>
+              <li>
+                <strong>Spend</strong> — the purchase-order total value
+                (<code>totalValueUsd</code>), summed across orders. It is read from the
+                record as posted, not recomputed as quantity × price.
+              </li>
+              <li>
+                <strong>Unit price</strong> — a <em>line-level</em> field: the PO price
+                sits on each PO line, the billed price on each invoice line. Where a
+                correction has been posted, a line&apos;s effective billed price is the
+                value-weighted net across its signed correction rows.
+              </li>
+            </ul>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">
+              2.4 Unit of analysis
+            </h3>
+            <p>Different surfaces score at different grains:</p>
+            <ul className="list-disc space-y-1 pl-5">
+              <li>
+                <strong>Supplier-level</strong> — the performance composite, ABC class,
+                the Kraljic quadrant and its supply-risk score, and the performance zone.
+              </li>
+              <li>
+                <strong>Category-level</strong> — spend by category, category
+                concentration, sourcing coverage, and the cost-premium benchmark (per
+                item within a category).
+              </li>
+              <li>
+                <strong>PO-level</strong> — cycle time and its stages, and the three-way
+                match.
+              </li>
+            </ul>
+            <p>
+              ⚠️{" "}
+              <strong className="text-foreground">
+                The Kraljic matrix plots suppliers
+              </strong>{" "}
+              on its two axes (spend × supply risk). Kraljic (1983) originally defined
+              those axes for <strong>purchased items / product categories</strong>, not
+              for suppliers; placing a whole supplier by its aggregate spend and a
+              roster-derived supply-risk score is a deliberate simplification, not the
+              framework&apos;s original unit.
+            </p>
+          </section>
+
+          <section className="space-y-2">
+            <h3 className="text-base font-semibold text-foreground">
+              2.5 Reproducibility
+            </h3>
+            <p>
+              The dataset was{" "}
+              <strong>
+                generated externally and the generator is not in this repository
+              </strong>
+              , so <strong>the dataset is not reproducible from source</strong>. What is
+              reproducible is the <em>analysis</em>: the import path takes raw operational
+              measurements only, and every scorecard value is then computed server-side
+              from the stored records by <code>python/scores.py</code>, deterministically
+              — the same records produce the same scores on every run.
+            </p>
+          </section>
         </CardContent>
       </Card>
 
@@ -205,8 +312,9 @@ export default async function MethodologyPage() {
               </li>
             </ul>
             <p className="text-xs">
-              The dataset is synthetic but realistic — prices, origins, and
-              category structure mirror Indonesian mining-procurement patterns.
+              The dataset is synthetic; prices, origins, and category structure are
+              patterned on Indonesian mining procurement — informed by benchmarks, not
+              verified against them (see Section 11).
             </p>
             <p>
               A <strong>median split</strong> on each axis divides the supplier
@@ -1154,8 +1262,9 @@ export default async function MethodologyPage() {
             </h3>
             <ul className="list-disc space-y-2 pl-5">
               <li>
-                The data is <strong>synthetic</strong> — calibrated to industry
-                benchmarks for realism, but not a record of real operations.
+                The data is <strong>synthetic</strong> — its generator was informed by
+                industry benchmarks but not verified against them (see Section 11), and
+                it is not a record of real operations.
               </li>
               <li>
                 Scope is a <strong>single organization</strong>; there are no
@@ -1852,10 +1961,61 @@ export default async function MethodologyPage() {
         </CardContent>
       </Card>
 
-      {/* 11. References */}
+      {/* 11. Calibration Benchmarks */}
       <Card className={cardElevation}>
         <CardHeader>
-          <CardTitle>11. References</CardTitle>
+          <CardTitle>11. Calibration Benchmarks</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm leading-relaxed text-muted-foreground">
+          <p>
+            The generator&apos;s parameters were <strong>informed by</strong> five
+            published sources. Each shaped a specific part of the synthetic data:
+          </p>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              <strong>APQC Open Standards Benchmarking</strong> — procure-to-pay cycle
+              times (the stage durations from requisition to payment).
+            </li>
+            <li>
+              <strong>Hackett Group P2P automation research</strong> — the magnitude of
+              automation&apos;s impact on process metrics.
+            </li>
+            <li>
+              <strong>CIPS Knowledge Hub supplier scorecard methodology</strong> — the
+              supplier-KPI categories the composite scores (quality, delivery, risk).
+              CIPS names the categories and <strong>prescribes no weights</strong>; the
+              weighting is an organisational calibration (see Section 4.2).
+            </li>
+            <li>
+              <strong>MOPS Singapore</strong> (Mean of Platts Singapore) — fuel
+              unit-pricing.
+            </li>
+            <li>
+              <strong>AME mining cost reports</strong> — commodity and mining-equipment
+              price references.
+            </li>
+          </ul>
+          <p>
+            <strong className="text-foreground">
+              The generated distributions have not been tested for conformance to these
+              benchmarks.
+            </strong>{" "}
+            Naming a source is not the same as demonstrating the generated data matches
+            it. Empirical inspection found generator signatures inconsistent with
+            realistic operational behaviour: <strong>payment discipline</strong> drawn
+            from a uniform distribution over 0–15 days (integer),{" "}
+            <strong>delivery slip</strong> modelled as a coin-flip at a single global
+            rate rather than per supplier, and{" "}
+            <strong>requisition estimate error</strong> drawn from Uniform(−0.10, +0.15).
+            Calibration is therefore <strong>partial and directional, not verified</strong>.
+          </p>
+        </CardContent>
+      </Card>
+
+      {/* 12. References */}
+      <Card className={cardElevation}>
+        <CardHeader>
+          <CardTitle>12. References</CardTitle>
         </CardHeader>
         <CardContent className="text-sm leading-relaxed text-muted-foreground">
           <ul className="list-disc space-y-1 pl-5">

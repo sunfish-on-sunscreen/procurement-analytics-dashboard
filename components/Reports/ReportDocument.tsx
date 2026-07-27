@@ -1230,8 +1230,10 @@ export function ReportDocument({
                 <div className="flex flex-col gap-2 text-sm text-muted-foreground">
                   <p>{T.methodology(ctx)}</p>
                   <p className="text-xs">
-                    Synthetic data calibrated to APQC, Hackett Group, CIPS, MOPS,
-                    and AME benchmarks. References: Juran (1951); Mann &amp;
+                    Synthetic data: generator parameters were informed by APQC,
+                    Hackett Group, CIPS, MOPS, and AME benchmarks; the generated
+                    distributions have not been verified against them (see the
+                    Methodology page, §11). References: Juran (1951); Mann &amp;
                     Whitney (1947); Kraljic (1983).
                   </p>
                 </div>
@@ -1314,9 +1316,10 @@ function MethodologyBlock({ text }: { text: string }) {
       <div className="flex flex-col gap-2 text-sm text-muted-foreground">
         <p>{text}</p>
         <p className="text-xs">
-          Synthetic data calibrated to APQC, Hackett Group, CIPS, MOPS, and AME
-          benchmarks. References: Juran (1951); Mann &amp; Whitney (1947); Kraljic
-          (1983).
+          Synthetic data: generator parameters were informed by APQC, Hackett Group,
+          CIPS, MOPS, and AME benchmarks; the generated distributions have not been
+          verified against them (see the Methodology page, §11). References: Juran
+          (1951); Mann &amp; Whitney (1947); Kraljic (1983).
         </p>
       </div>
     </BriefSection>
