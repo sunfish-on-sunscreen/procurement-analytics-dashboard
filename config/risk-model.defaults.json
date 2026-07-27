@@ -1,0 +1,17 @@
+{
+  "performanceComposite": {
+    "quality_score": { "weight": 0.30, "enabled": true },
+    "delivery_score": { "weight": 0.30, "enabled": true },
+    "process_score": { "weight": 0.22, "enabled": true },
+    "risk_score": { "weight": 0.18, "enabled": true }
+  },
+  "performanceRisk": {
+    "country_distance": { "weight": 0.60, "enabled": true },
+    "roster_concentration": { "weight": 0.40, "enabled": true }
+  },
+  "supplyRisk": {
+    "supply_concentration": { "weight": 0.50, "enabled": true },
+    "cost_premium": { "weight": 0.25, "enabled": true },
+    "import_friction": { "weight": 0.25, "enabled": true }
+  }
+}

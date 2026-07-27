@@ -31,8 +31,7 @@ export default async function ReportPreviewPage() {
       supplierCategory={supplierCategory}
       supplierDirectory={supplierDirectory}
       generatedBy={session.name}
-      configVersion={stamp.version}
-      configFingerprint={stamp.fingerprint}
+      configStamp={stamp}
     />
   );
 }

@@ -6,9 +6,8 @@ import { recomputeAllPeriods } from "@/lib/recompute";
 import {
   validateComposite,
   resolveEffectiveWeights,
-  nextConfigVersion,
-  fingerprintComposites,
-  type RiskModel,
+  mergeAndBumpVersions,
+  buildConfigStamp,
 } from "@/lib/risk-model";
 import { readRiskModel, writeRiskModel } from "@/lib/risk-model-server";
 
@@ -35,17 +34,12 @@ const Body = z.object({
     .min(1),
 });
 
-function todayYYYYMMDD(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
-}
-
 /**
  * Save the risk-model weights (any authenticated user — configuration is unrestricted
  * by design; the limitation is documented in Methodology §4.2). Validates via the SHARED
- * pure functions, writes config/risk-model.json with a bumped version, then recomputes
- * every period through the sanctioned recompute-on-read path. No snapshot/cache layer.
+ * pure functions, writes config/risk-model.json bumping ONLY the composites whose own
+ * components changed, then recomputes every period through the sanctioned
+ * recompute-on-read path. No snapshot/cache layer.
  */
 export async function POST(request: Request) {
   const session = await getSession();
@@ -67,24 +61,11 @@ export async function POST(request: Request) {
     );
   }
 
-  // Merge weight + enabled into the CURRENT on-disk config (everything else preserved).
+  // Merge weight + enabled into the CURRENT on-disk config, bumping the version of ONLY
+  // the composites whose own components changed (a per-composite Save must never bump
+  // another). Everything else (labels, polarity, schemaVersion) is preserved.
   const current = await readRiskModel();
-  const edits = new Map(
-    parsed.data.composites.map((c) => [c.id, new Map(c.components.map((x) => [x.id, x]))]),
-  );
-  const merged: RiskModel = {
-    ...current,
-    composites: current.composites.map((composite) => {
-      const compEdits = edits.get(composite.id);
-      return {
-        ...composite,
-        components: composite.components.map((comp) => {
-          const e = compEdits?.get(comp.id);
-          return e ? { ...comp, enabled: e.enabled, weight: e.weight } : comp;
-        }),
-      };
-    }),
-  };
+  const { merged, changedIds } = mergeAndBumpVersions(current, parsed.data.composites);
 
   // Validate every composite: declared weights sum to 1.0, and at least one enabled.
   // Surface either failure as a 400 the UI renders inline (naming the composite).
@@ -100,23 +81,31 @@ export async function POST(request: Request) {
     }
   }
 
-  merged.version = nextConfigVersion(current.version, todayYYYYMMDD());
-  const fingerprint = fingerprintComposites(merged.composites);
-  await writeRiskModel(merged);
+  // Persist ONLY when something changed (a no-op save writes nothing + bumps no
+  // version). But ALWAYS recompute: a save is also how an admin RETRIES after a prior
+  // save whose config write SUCCEEDED but whose recompute FAILED — the config is then
+  // already on disk (so a retry of the same values is a config no-op), yet the analyses
+  // are still stale and MUST be reconciled. Short-circuiting the recompute on "no config
+  // change" would leave the footer stamping a config the numbers were not produced under.
+  const stamp = buildConfigStamp(merged);
+  if (changedIds.length > 0) {
+    await writeRiskModel(merged);
+  }
 
   const result = await recomputeAllPeriods();
   if (!result.ok) {
     // The config is already written; the analyses may now be inconsistent. Surface it
-    // honestly — same failure contract as the CRUD routes.
+    // honestly — same failure contract as the CRUD routes. Re-saving retries the recompute.
+    const saved = changedIds.length ? `Saved (${changedIds.join(", ")})` : "No config change";
     return NextResponse.json(
       {
-        error: `Weights saved as ${merged.version}, but the recompute failed — the dashboard may be stale until it succeeds. ${result.error}`,
-        version: merged.version,
-        fingerprint,
+        error: `${saved}, but the recompute failed — the dashboard may be stale until it succeeds; re-saving retries it. ${result.error}`,
+        stamp,
+        changedIds,
       },
       { status: 500 },
     );
   }
 
-  return NextResponse.json({ version: merged.version, fingerprint });
+  return NextResponse.json({ stamp, changedIds });
 }

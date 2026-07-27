@@ -137,8 +137,7 @@ export default async function ReportDetailPage({
         generatedBy: summary.generatedByUser.name,
         generatedAt: summary.createdAt.toISOString(),
         filename: `${summary.title.replace(/[^\w-]+/g, "_")}.pdf`,
-        configVersion: stamp.version,
-        configFingerprint: stamp.fingerprint,
+        configStamp: stamp,
       }}
       analyses={analyses}
       config={config}

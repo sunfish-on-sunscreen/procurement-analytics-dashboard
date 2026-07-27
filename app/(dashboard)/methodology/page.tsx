@@ -8,7 +8,6 @@ import {
 } from "@/components/ui/card";
 import { cardElevation } from "@/lib/utils";
 import { SHOW_METHODOLOGY } from "@/lib/feature-flags";
-import { fingerprintComposites } from "@/lib/risk-model";
 import { readRiskModel } from "@/lib/risk-model-server";
 import { RiskModelSettings } from "@/components/Methodology/RiskModelSettings";
 
@@ -17,7 +16,6 @@ export default async function MethodologyPage() {
 
   await requireAuth();
   const riskModel = await readRiskModel();
-  const riskFingerprint = fingerprintComposites(riskModel.composites);
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
@@ -792,10 +790,7 @@ export default async function MethodologyPage() {
               and multiplied by its weight; the emitted point values stay on the original
               scale and are byte-identical (see the reconciliation note in Section 3.2).
             </p>
-            <RiskModelSettings
-              initialModel={riskModel}
-              initialFingerprint={riskFingerprint}
-            />
+            <RiskModelSettings initialModel={riskModel} />
           </section>
 
           <section className="space-y-2">

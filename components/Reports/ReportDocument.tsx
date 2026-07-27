@@ -18,6 +18,7 @@ import { type ReportConfig, type SectionKey } from "@/lib/report-config";
 import type { CycleBreakdown } from "@/lib/cycle-time-types";
 import type { TemporalLoad } from "@/lib/temporal-anomalies";
 import { QUADRANT_COLORS } from "@/lib/chart-colors";
+import { type ConfigStamp, formatStampComposites } from "@/lib/risk-model";
 import {
   renderReportArgument,
   renderSupplierBrief,
@@ -70,10 +71,10 @@ export type ReportMeta = {
   generatedAt: string; // ISO
   filename: string;
   ephemeral?: boolean;
-  // Risk-model config that produced this rendering — read at request time (server)
-  // so the printed footer stamp reflects the live config, not a build-time bundle.
-  configVersion: string;
-  configFingerprint: string;
+  // Risk-model config stamp that produced this rendering — read at request time (server)
+  // so the printed footer reflects the live config, not a build-time bundle. Carries
+  // EVERY composite's version + the whole-config fingerprint (Stage 2).
+  configStamp: ConfigStamp;
 };
 
 const QUADRANT_ORDER: KraljicQuadrant[] = [
@@ -1330,18 +1331,20 @@ function MethodologyBlock({ text }: { text: string }) {
 // scores on the page to the exact risk-model configuration that produced them, so a
 // printout is reproducible from its version + content fingerprint.
 function ReportConfigStamp({ meta }: { meta: ReportMeta }) {
+  const stamp = meta.configStamp;
   return (
     <section className="mt-2 flex break-inside-avoid flex-col gap-1 border-t pt-3 text-xs text-muted-foreground">
       <p>
-        Risk-model config{" "}
-        <span className="font-medium text-foreground">v{meta.configVersion}</span>{" "}
-        <span className="tabular-nums">({meta.configFingerprint})</span> &middot;
-        generated {generatedFmt.format(new Date(meta.generatedAt))}
+        Risk model &mdash;{" "}
+        <span className="text-foreground">{formatStampComposites(stamp)}</span> &middot;{" "}
+        config <span className="tabular-nums">{stamp.fingerprint}</span> &middot; generated{" "}
+        {generatedFmt.format(new Date(meta.generatedAt))}
       </p>
       <p>
         The weights that produced these scores are an organisational configuration, not
-        fixed constants. This report is reproducible from the config version above; a
-        different configuration can move the quadrant and zone labels.
+        fixed constants. This report is reproducible from the composite versions and the
+        whole-config fingerprint above; a different configuration can move the quadrant
+        and zone labels.
       </p>
     </section>
   );

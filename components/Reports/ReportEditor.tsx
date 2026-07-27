@@ -10,6 +10,7 @@ import {
   type ReportConfig,
 } from "@/lib/report-config";
 import type { PeriodSelection } from "@/lib/period-constants";
+import type { ConfigStamp } from "@/lib/risk-model";
 import {
   buildSupplierDetail,
   type SupplierDirectory,
@@ -62,8 +63,7 @@ export function ReportEditor({
   supplierCategory,
   supplierDirectory,
   generatedBy,
-  configVersion,
-  configFingerprint,
+  configStamp,
 }: {
   defaultPeriod: PeriodSelection;
   periods: PeriodOption[];
@@ -71,8 +71,7 @@ export function ReportEditor({
   supplierCategory: Record<string, string>;
   supplierDirectory: SupplierDirectory;
   generatedBy: string;
-  configVersion: string;
-  configFingerprint: string;
+  configStamp: ConfigStamp;
 }) {
   const router = useRouter();
   const yearById = useMemo(
@@ -88,6 +87,7 @@ export function ReportEditor({
   const [loaded, setLoaded] = useState<{
     key: string;
     analyses: ReportAnalyses;
+    stamp?: ConfigStamp;
   } | null>(null);
   const [errored, setErrored] = useState<{ key: string; msg: string } | null>(
     null,
@@ -110,6 +110,10 @@ export function ReportEditor({
     config.period.mode === "single" ? config.period.singleId : null;
 
   const analyses = loaded?.key === spanKey ? loaded.analyses : null;
+  // The stamp travels WITH the fetched analyses so the footer always identifies the
+  // config that produced the numbers on screen, not the stale page-load config.
+  const activeStamp =
+    loaded?.key === spanKey ? (loaded.stamp ?? configStamp) : configStamp;
   const error = errored?.key === spanKey ? errored.msg : null;
   const loading = !!startDate && !analyses && !error;
 
@@ -194,10 +198,15 @@ export function ReportEditor({
           const e = (await res.json().catch(() => ({}))) as { error?: string };
           throw new Error(e.error || "Compute failed");
         }
-        return res.json() as Promise<ReportAnalyses>;
+        return res.json() as Promise<ReportAnalyses & { configStamp?: ConfigStamp }>;
       })
       .then((data) => {
-        if (!cancelled) setLoaded({ key, analyses: data });
+        if (cancelled) return;
+        // Keep the stamp that came WITH these numbers; the render falls back to the
+        // page-load prop until the first fetch lands (referencing the prop here would
+        // wrongly add it to this period-keyed effect's deps).
+        const { configStamp: fetchedStamp, ...rest } = data;
+        setLoaded({ key, analyses: rest as ReportAnalyses, stamp: fetchedStamp });
       })
       .catch((err: unknown) => {
         if (!cancelled)
@@ -280,8 +289,7 @@ export function ReportEditor({
     generatedAt: new Date().toISOString(),
     filename: `Report_${label.replace(/[^\w-]+/g, "_")}.pdf`,
     ephemeral: config.period.mode === "range",
-    configVersion,
-    configFingerprint,
+    configStamp: activeStamp,
   };
 
   return (

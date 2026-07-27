@@ -13,7 +13,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { type RiskModel, fingerprintComposites } from "@/lib/risk-model";
+import { type RiskModel, type ConfigStamp, buildConfigStamp } from "@/lib/risk-model";
 
 const CONFIG_PATH = path.join(process.cwd(), "config", "risk-model.json");
 
@@ -29,13 +29,10 @@ export async function writeRiskModel(model: RiskModel): Promise<void> {
 }
 
 /**
- * The live {version, fingerprint} stamp, read at request time. Used by every report
- * render path so a printed report's footer reflects the config that produced it.
+ * The live config stamp (schema version + whole-config fingerprint + every composite's
+ * version), read at request time. Used by every report render path so a printed report's
+ * footer reflects the exact configuration that produced its numbers.
  */
-export async function readRiskModelStamp(): Promise<{
-  version: string;
-  fingerprint: string;
-}> {
-  const model = await readRiskModel();
-  return { version: model.version, fingerprint: fingerprintComposites(model.composites) };
+export async function readRiskModelStamp(): Promise<ConfigStamp> {
+  return buildConfigStamp(await readRiskModel());
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getSession } from "@/lib/auth";
 import { assembleReportRangeAnalyses } from "@/lib/report-analyses";
+import { readRiskModelStamp } from "@/lib/risk-model-server";
 
 export const runtime = "nodejs";
 
@@ -56,5 +57,10 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
-  return NextResponse.json(data);
+  // Return the live config stamp ALONGSIDE the freshly-computed numbers so the editor's
+  // footer tracks the same config that produced them — otherwise a mid-session config
+  // save elsewhere would leave the footer stamping the stale page-load config over new
+  // numbers (the persisted /reports/[id] page already re-reads the stamp at request time).
+  const configStamp = await readRiskModelStamp();
+  return NextResponse.json({ ...data, configStamp });
 }

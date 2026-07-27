@@ -1,17 +1,27 @@
 /**
- * Typed loader for config/risk-model.json — the single source of truth for the two
- * risk composites (supply risk + performance-risk sub-score).
+ * Typed loader for config/risk-model.json — the single source of truth for the three
+ * scoring composites (performanceComposite + the two risk composites).
  *
- * The BINDING consumer in Phase 1 is the Python compute (python/risk_config.py); this
- * TS module mirrors its interface + behaviour so the config is consumable from the
- * app's surfaces (methodology page, detail panels) in a later phase. It is not yet
- * wired into any compute — TS currently only renders the Python-produced risk numbers.
+ * The BINDING compute consumer is python/risk_config.py; this TS module mirrors its
+ * weight/enabled/polarity interface AND owns the VERSIONING + FINGERPRINTING the reports
+ * and settings UI use. Python ignores version/schemaVersion/shortLabel/polarityLabel, so
+ * none of the Stage-2 versioning touches a score.
  *
- * resolveEffectiveWeights is the renormalization function (the peer of the Python one):
- * it drops disabled components and proportionally redistributes their weight so the
- * result always sums to 1.0, throwing if every component is disabled.
+ * VERSIONING MODEL (Stage 2):
+ *  - Each composite carries its OWN `version`; a save bumps only the composites whose
+ *    own components changed (see mergeAndBumpVersions). A top-level `schemaVersion` tracks
+ *    the config FILE format, separate from the content versions.
+ *  - Fingerprints are DERIVED (never stored), over COMPUTE-AFFECTING fields only
+ *    (weights, enabled, invertPolarity, derived dependsOn — NOT labels/definitions/
+ *    polarityLabel/version), so "fingerprint changed" means "the numbers changed".
+ *  - configFingerprint (whole config) is the report-footer + drift anchor. It covers
+ *    everything, including future lookup tables, with no format change.
+ *  - compositeFingerprint is dependency-aware (over the composite AND its transitive
+ *    deps), so editing performanceRisk changes performanceComposite's fingerprint even
+ *    though its own components are untouched — used for settings-UI audit granularity.
  */
 import riskModelJson from "@/config/risk-model.json";
+import defaultsJson from "@/config/risk-model.defaults.json";
 
 export interface RiskComponent {
   id: string;
@@ -29,8 +39,8 @@ export interface RiskComponent {
   builtin?: boolean;
   /**
    * For a built-in sub-score that is ITSELF produced by another composite, the id of
-   * that composite (risk_score -> "performanceRisk"). The two weight sets multiply, not
-   * add; the UI surfaces this so the relationship is not mistaken for additive.
+   * that composite (risk_score -> "performanceRisk"). This is the DEPENDENCY declaration
+   * (dependenciesOf derives the graph from it); the two weight sets multiply, not add.
    */
   configuredIn?: string;
 }
@@ -38,6 +48,10 @@ export interface RiskComponent {
 export interface RiskComposite {
   id: "supplyRisk" | "performanceRisk" | "performanceComposite";
   label: string;
+  /** Compact label for the report footer (e.g. "performance", "supply-risk"). */
+  shortLabel: string;
+  /** Per-composite content version; bumps when THIS composite's own components change. */
+  version: string;
   invertPolarity: boolean;
   /**
    * Display badge copy for the score's direction (e.g. "higher = safer"). AUTHORITATIVE
@@ -49,21 +63,29 @@ export interface RiskComposite {
 }
 
 export interface RiskModel {
-  /** Human-readable config version, stamped into every printed report. */
-  version: string;
+  /** Config FILE-FORMAT version, separate from the per-composite content versions. */
+  schemaVersion: string;
   composites: RiskComposite[];
 }
+
+/** Frozen default editable knobs (weight + enabled) per composite/component. The reset
+ * target — the same source the byte-identical baseline is defined against. */
+export type RiskModelDefaults = Record<
+  string,
+  Record<string, { weight: number; enabled: boolean }>
+>;
 
 /** Float tolerance for the "weights sum to 1.0" checks (mirrors the Python side). */
 export const WEIGHT_SUM_TOL = 1e-9;
 
 export const RISK_MODEL: RiskModel = riskModelJson as unknown as RiskModel;
+export const RISK_MODEL_DEFAULTS: RiskModelDefaults = defaultsJson as RiskModelDefaults;
 
-/** Declared config version (from config/risk-model.json). */
-export const RISK_MODEL_VERSION: string = RISK_MODEL.version;
+/** Config schema (file-format) version from config/risk-model.json. */
+export const RISK_MODEL_SCHEMA_VERSION: string = RISK_MODEL.schemaVersion;
 
-// Deterministic canonical serialization (recursively key-sorted) so the fingerprint
-// depends only on the weights/enabled/polarity, never on key order or the JSON comment.
+// Deterministic canonical serialization (recursively key-sorted) so a fingerprint
+// depends only on values, never on key order.
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
   if (value && typeof value === "object") {
@@ -73,8 +95,7 @@ function canonical(value: unknown): string {
   return JSON.stringify(value);
 }
 
-// FNV-1a 32-bit hash — not cryptographic, just a stable content fingerprint so a
-// report's stamp changes iff a weight/enabled/polarity actually changed.
+// FNV-1a 32-bit hash — not cryptographic, just a stable content fingerprint.
 function fnv1a(input: string): string {
   let hash = 0x811c9dc5;
   for (let i = 0; i < input.length; i++) {
@@ -85,32 +106,147 @@ function fnv1a(input: string): string {
 }
 
 /**
- * Content fingerprint of a set of composites (weights + enabled + polarity),
- * independent of the declared version. Two configs with the same weights share a
- * fingerprint; changing any weight changes it — even if someone forgets to bump
- * `version`. Pure + deterministic, so the server (reading the live file) and the
- * settings UI (previewing an edit) compute the same value.
+ * The direct dependencies of a composite — the composites that PRODUCE its built-in
+ * sub-scores — derived from each component's `configuredIn`. Sorted + deduped. This is
+ * the single, config-declared source of the dependency graph (no separate dependsOn
+ * field to drift). supplyRisk / performanceRisk have none today.
  */
-export function fingerprintComposites(composites: RiskComposite[]): string {
-  return fnv1a(canonical(composites));
+export function dependenciesOf(composite: RiskComposite): string[] {
+  const deps = new Set<string>();
+  for (const c of composite.components) if (c.configuredIn) deps.add(c.configuredIn);
+  return [...deps].sort();
 }
 
-/** Build-time fingerprint of the bundled config (a fallback default). */
-export const RISK_MODEL_FINGERPRINT: string = fingerprintComposites(RISK_MODEL.composites);
+// COMPUTE-AFFECTING projection of ONE composite: only the fields that change a score —
+// invertPolarity, the derived dependency list, and per component {enabled, weight}.
+// Deliberately excludes label/definition/provenance/builtin/polarityLabel/shortLabel/
+// version. (Stage 4 adds bounds / lookup values under each component here.)
+function projectComputeAffecting(composite: RiskComposite): Record<string, unknown> {
+  const components: Record<string, unknown> = {};
+  for (const c of composite.components) {
+    // A DISABLED component's weight is dropped by resolveEffectiveWeights, so it reaches
+    // no score — omit it so the fingerprint tracks EXACTLY the values that determine the
+    // numbers. Editing a parked (disabled) weight must not move the fingerprint; it would
+    // otherwise bump a version + trigger a recompute for byte-identical output.
+    components[c.id] = c.enabled ? { enabled: true, weight: c.weight } : { enabled: false };
+  }
+  return {
+    invertPolarity: composite.invertPolarity,
+    dependsOn: dependenciesOf(composite),
+    components,
+  };
+}
 
 /**
- * Next config version on save: `rc-{YYYYMMDD}-{n}`, where n increments within a day.
- * If `current` already names today (`rc-{today}-{k}`), returns k+1; otherwise 1. Pure —
- * the caller passes today's date so this stays deterministic and testable.
+ * Whole-config fingerprint over the compute-affecting projection of ALL composites — the
+ * report-footer stamp and the drift anchor. Changes iff some score-determining value
+ * changes anywhere (incl. a dependency edit, or — in Stage 4 — a lookup value), even if
+ * a version bump was forgotten. Independent of labels and version strings.
  */
-export function nextConfigVersion(current: string, todayYYYYMMDD: string): string {
-  const prefix = `rc-${todayYYYYMMDD}-`;
-  let n = 1;
-  if (current.startsWith(prefix)) {
-    const k = Number.parseInt(current.slice(prefix.length), 10);
-    if (Number.isFinite(k) && k >= 1) n = k + 1;
-  }
-  return `${prefix}${n}`;
+export function configFingerprint(composites: RiskComposite[]): string {
+  const proj: Record<string, unknown> = {};
+  for (const c of composites) proj[c.id] = projectComputeAffecting(c);
+  return fnv1a(canonical(proj));
+}
+
+/**
+ * Dependency-aware fingerprint of ONE composite: over its own compute-affecting
+ * projection AND the projections of its transitive dependencies. Editing performanceRisk
+ * changes performanceComposite's fingerprint even though its own components are untouched
+ * — the settings UI shows this per composite for audit granularity. Cycle-guarded per
+ * path (the graph is a DAG today).
+ */
+export function compositeFingerprint(id: string, composites: RiskComposite[]): string {
+  const byId = new Map<string, RiskComposite>(composites.map((c) => [c.id, c]));
+  const build = (cid: string, path: Set<string>): unknown => {
+    if (path.has(cid)) return { cycle: cid };
+    const c = byId.get(cid);
+    if (!c) return { missing: cid };
+    const next = new Set(path).add(cid);
+    const deps: Record<string, unknown> = {};
+    for (const d of dependenciesOf(c)) deps[d] = build(d, next);
+    return { self: projectComputeAffecting(c), deps };
+  };
+  return fnv1a(canonical(build(id, new Set())));
+}
+
+/** Build-time whole-config fingerprint of the bundled config (a fallback default). */
+export const RISK_MODEL_FINGERPRINT: string = configFingerprint(RISK_MODEL.composites);
+
+/**
+ * Next per-composite version on save: bump the patch segment of a semver string
+ * (1.0.0 -> 1.0.1). Pure + monotonic. A non-semver legacy value starts a fresh patch
+ * line at 1.0.1 so the value still changes on save.
+ */
+export function nextVersion(current: string): string {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(current.trim());
+  if (m) return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`;
+  return "1.0.1";
+}
+
+/** A minimal per-composite edit payload (id + component enabled/weight). */
+export interface CompositeEdit {
+  id: string;
+  components: { id: string; enabled: boolean; weight: number }[];
+}
+
+/**
+ * Merge weight/enabled edits into the current config and bump the version of ONLY the
+ * composites whose own components actually changed — saving one composite must never
+ * bump another. Returns the merged model + the ids that changed. Pure; the route does
+ * the file write + recompute. schemaVersion and all display fields are preserved.
+ */
+export function mergeAndBumpVersions(
+  current: RiskModel,
+  edits: CompositeEdit[],
+): { merged: RiskModel; changedIds: string[] } {
+  const editById = new Map(
+    edits.map((e) => [e.id, new Map(e.components.map((c) => [c.id, c]))]),
+  );
+  const changedIds: string[] = [];
+  const composites = current.composites.map((composite) => {
+    const compEdits = editById.get(composite.id);
+    if (!compEdits) return composite;
+    let changed = false;
+    const components = composite.components.map((comp) => {
+      const e = compEdits.get(comp.id);
+      if (!e) return comp;
+      if (e.enabled !== comp.enabled || e.weight !== comp.weight) changed = true;
+      return { ...comp, enabled: e.enabled, weight: e.weight };
+    });
+    if (!changed) return { ...composite, components };
+    changedIds.push(composite.id);
+    return { ...composite, components, version: nextVersion(composite.version) };
+  });
+  return { merged: { ...current, composites }, changedIds };
+}
+
+/**
+ * The report-footer stamp: schema version, the whole-config fingerprint, and each
+ * composite's compact label + version. All versions present and resolvable; one line.
+ */
+export interface ConfigStamp {
+  schemaVersion: string;
+  fingerprint: string;
+  composites: { id: string; shortLabel: string; version: string }[];
+}
+
+export function buildConfigStamp(model: RiskModel): ConfigStamp {
+  return {
+    schemaVersion: model.schemaVersion,
+    fingerprint: configFingerprint(model.composites),
+    composites: model.composites.map((c) => ({
+      id: c.id,
+      shortLabel: c.shortLabel,
+      version: c.version,
+    })),
+  };
+}
+
+/** The composite half of the footer line: "performance v1.0.0 · perf-risk v1.0.0 · …".
+ * Degrades gracefully — N composites produce N tokens. */
+export function formatStampComposites(stamp: ConfigStamp): string {
+  return stamp.composites.map((c) => `${c.shortLabel} v${c.version}`).join(" · ");
 }
 
 export function getComposite(id: RiskComposite["id"]): RiskComposite {
@@ -134,7 +270,7 @@ export function validateComposite(composite: RiskComposite, tol = WEIGHT_SUM_TOL
 }
 
 /**
- * THE renormalization function — used by both composites. Returns
+ * THE renormalization function — used by all composites. Returns
  * { componentId -> effective weight } over the ENABLED components, dividing each by
  * the enabled total so the result sums to 1.0 (disabled weight redistributed
  * proportionally). Throws if every component is disabled. With all enabled and the
