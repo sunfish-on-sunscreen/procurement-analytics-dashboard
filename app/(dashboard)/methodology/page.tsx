@@ -1313,7 +1313,8 @@ export default async function MethodologyPage() {
                 median splits on both classification matrices, the longest-cycle cut,
                 the 8-day slow-stage flag, and the Mann-Whitney U comparison are all
                 constants. The <em>risk-model weights</em> are the one exception: the
-                supply-risk and performance-risk component weights, and each
+                performance-composite blend weights (quality / delivery / process /
+                risk), the supply-risk and performance-risk component weights, and each
                 component&apos;s enable/disable, are configurable — see Section 4.2a. No
                 other parameter is adjustable.
               </li>

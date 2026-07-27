@@ -1,11 +1,81 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for the two risk composites. Extracted from python/compute_analyses.py (supplyRisk) and python/scores.py (performanceRisk) so the per-component point ceilings are now EXPLICIT normalized weights. Each component's response curve is normalized to 0-100 in code; the WEIGHT here scales it. For every component, weight * 100 == the old point ceiling (supply_concentration 0.50->50, cost_premium 0.25->25, import_friction 0.25->25; country_distance 0.60->60, roster_concentration 0.40->40). Weights per composite MUST sum to 1.0. invertPolarity=true applies the final 100-minus inversion (higher=safer). Consumed by python/risk_config.py (binding, Phase 1) and lib/risk-model.ts (types + loader). `version` is stamped into every printed report; bump it whenever a weight/enabled/polarity changes so a report remains reproducible from its stamp. Do NOT change weights without re-recording every risk baseline in the same change.",
+  "_comment": "SINGLE SOURCE OF TRUTH for the scoring weights: the top-level performanceComposite that blends the four supplier sub-scores, plus two risk composites (performanceRisk, which feeds the composite's risk_score component, and supplyRisk, the Kraljic Y-axis). Extracted from python/scores.py (composite + performanceRisk) and python/compute_analyses.py (supplyRisk) so every per-component weight is now an EXPLICIT normalized weight. For the risk composites each component's response curve is normalized to 0-100 in code and the WEIGHT here scales it; weight * 100 == the old point ceiling (country_distance 0.60->60, roster_concentration 0.40->40; supply_concentration 0.50->50, cost_premium 0.25->25, import_friction 0.25->25). performanceComposite is WEIGHTS ONLY: its components (quality_score/delivery_score/process_score/risk_score) are the EXISTING sub-scores computed by scores.py, not formula-defined, so they carry builtin:true and the future formula editor must never offer to edit their formula. Weights per composite MUST sum to 1.0. invertPolarity is a COMPUTE flag (=true applies the final 100-minus, performanceRisk higher=safer); performanceComposite uses invertPolarity=false because it is a weighted average of higher-is-better sub-scores (combine_score's clip is then a no-op). polarityLabel is the DISPLAY badge copy and is authoritative for the UI — never re-derive the badge from invertPolarity (they are different concerns: a compute flag vs display text). configuredIn links a built-in sub-score to the composite that PRODUCES it (risk_score -> performanceRisk); the two weight sets MULTIPLY, not add. ID CONVENTION (deliberate, not sloppiness): performanceComposite component ids ARE the scores.py column names (quality_score, delivery_score, process_score, risk_score) because these components are not formula-defined — they ARE those columns, and the id documenting exactly which column it reads is a feature, not a mapping layer that could drift. The risk composite ids (supply_concentration, cost_premium, ...) are unsuffixed because they are not columns. Consumed by python/risk_config.py (binding) and lib/risk-model.ts (types + loader). `version` is stamped into every printed report; bump it whenever a weight/enabled/polarity changes so a report remains reproducible from its stamp. Do NOT change weights without re-recording every affected baseline in the same change.",
   "version": "1.0.0",
   "composites": [
+    {
+      "id": "performanceComposite",
+      "label": "Performance composite (supplier score)",
+      "invertPolarity": false,
+      "polarityLabel": "higher = better performance",
+      "components": [
+        {
+          "id": "quality_score",
+          "label": "Quality",
+          "definition": "Existing quality sub-score: per-PO defect rate + complaint rate, each normalized 0-100 against fixed bounds, averaged. Computed by scores.py from transaction data; a built-in sub-score, not a formula-editable component.",
+          "provenance": "computed",
+          "builtin": true,
+          "enabled": true,
+          "weight": 0.30
+        },
+        {
+          "id": "delivery_score",
+          "label": "Delivery",
+          "definition": "Existing delivery sub-score: on-time-delivery % + average lead time, each normalized 0-100 against fixed bounds, averaged. Computed by scores.py from transaction data; a built-in sub-score, not a formula-editable component.",
+          "provenance": "computed",
+          "builtin": true,
+          "enabled": true,
+          "weight": 0.30
+        },
+        {
+          "id": "process_score",
+          "label": "Process",
+          "definition": "Existing process sub-score: three-way-match pass rate, normalized 0-100. Computed by scores.py from transaction data; a built-in sub-score, not a formula-editable component.",
+          "provenance": "computed",
+          "builtin": true,
+          "enabled": true,
+          "weight": 0.22
+        },
+        {
+          "id": "risk_score",
+          "label": "Risk",
+          "definition": "The performanceRisk composite output (structural: country distance + roster concentration, inverted so higher=safer). A built-in sub-score, not a formula-editable component.",
+          "provenance": "computed",
+          "builtin": true,
+          "configuredIn": "performanceRisk",
+          "enabled": true,
+          "weight": 0.18
+        }
+      ]
+    },
+    {
+      "id": "performanceRisk",
+      "label": "Performance risk sub-score (composite input, higher=safer)",
+      "invertPolarity": true,
+      "polarityLabel": "higher = safer",
+      "components": [
+        {
+          "id": "country_distance",
+          "label": "Country distance",
+          "definition": "Geographic supply-distance tier of the supplier's country. 0-100 lookup {Indonesia:0, ASEAN:30, Asia-Pacific:60, other:100}.",
+          "provenance": "lookup",
+          "enabled": true,
+          "weight": 0.60
+        },
+        {
+          "id": "roster_concentration",
+          "label": "Roster concentration",
+          "definition": "Roster-based supply concentration (the SAME curve as supplyRisk.supply_concentration), on the 0-100 axis {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
+          "provenance": "lookup",
+          "enabled": true,
+          "weight": 0.40
+        }
+      ]
+    },
     {
       "id": "supplyRisk",
       "label": "Supply risk (Kraljic Y-axis)",
       "invertPolarity": false,
+      "polarityLabel": "higher = riskier",
       "components": [
         {
           "id": "supply_concentration",
@@ -30,29 +100,6 @@
           "provenance": "lookup",
           "enabled": true,
           "weight": 0.25
-        }
-      ]
-    },
-    {
-      "id": "performanceRisk",
-      "label": "Performance risk sub-score (composite input, higher=safer)",
-      "invertPolarity": true,
-      "components": [
-        {
-          "id": "country_distance",
-          "label": "Country distance",
-          "definition": "Geographic supply-distance tier of the supplier's country. 0-100 lookup {Indonesia:0, ASEAN:30, Asia-Pacific:60, other:100}.",
-          "provenance": "lookup",
-          "enabled": true,
-          "weight": 0.60
-        },
-        {
-          "id": "roster_concentration",
-          "label": "Roster concentration",
-          "definition": "Roster-based supply concentration (the SAME curve as supplyRisk.supply_concentration), on the 0-100 axis {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
-          "provenance": "lookup",
-          "enabled": true,
-          "weight": 0.40
         }
       ]
     }

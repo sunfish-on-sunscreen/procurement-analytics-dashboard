@@ -24,15 +24,18 @@ The Service dimension and single_source_risk were removed. All rounded to 2 dp.
 import numpy as np
 import pandas as pd
 
-import risk_config  # config/risk-model.json weights for the performanceRisk composite
+import risk_config  # config/risk-model.json weights: performanceRisk + performanceComposite
 
-# Composite weights (Batch 3a spec).
-WEIGHTS = {
-    "quality_score": 0.30,
-    "delivery_score": 0.30,
-    "process_score": 0.22,
-    "risk_score": 0.18,
-}
+# Composite weights now live in config/risk-model.json (the `performanceComposite`
+# composite). This module-level dict is DERIVED from that config so the offline
+# re-export (scripts/transform_dataset re-exports scores.WEIGHTS) keeps working and can
+# never drift from the authoritative weights. It is NOT the compute source of truth:
+# compute_scores reads the composite FRESH from risk_config on every call (mirroring the
+# risk sub-score), so a settings-UI edit or a sensitivity-run monkeypatch of
+# risk_config.get_composite takes effect without touching this snapshot.
+WEIGHTS = risk_config.resolve_effective_weights(
+    risk_config.get_composite("performanceComposite")
+)
 
 SCORE_COLS = [
     "quality_score", "delivery_score",
@@ -210,9 +213,19 @@ def compute_scores(m: pd.DataFrame, roster_cat_counts: dict) -> pd.DataFrame:
         )
         new_risk.append(float(risk_config.combine_score(penalty, _invert)))
     m["risk_score"] = np.round(new_risk, 2)
-    m["composite_score"] = np.round(
-        sum(m[col] * w for col, w in WEIGHTS.items()), 2
-    )
+    # Composite weights + polarity come from config (performanceComposite), through the
+    # SAME shared resolve_effective_weights + combine_score the risk composites use — no
+    # second renormalization path. Read fresh each call so a config edit / sensitivity
+    # monkeypatch of risk_config.get_composite takes effect. With all four enabled and
+    # 0.30 + 0.30 + 0.22 + 0.18 == 1.0 exactly (verified), the divisor is 1.0 and
+    # invertPolarity=false makes combine_score a clip-only no-op, so this reproduces the
+    # old raw-weight sum bit-for-bit. The _pw iteration order is the config component
+    # order (quality/delivery/process/risk), matching the old WEIGHTS dict order.
+    _pc = risk_config.get_composite("performanceComposite")
+    _pw = risk_config.resolve_effective_weights(_pc)
+    _pinvert = risk_config.invert_polarity(_pc)
+    _composite = sum(m[col] * _pw[col] for col in _pw)
+    m["composite_score"] = np.round(risk_config.combine_score(_composite, _pinvert), 2)
     return m
 
 

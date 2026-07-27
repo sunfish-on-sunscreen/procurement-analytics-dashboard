@@ -28,12 +28,15 @@ function toDraft(composites: RiskComposite[]): DraftComposite[] {
   }));
 }
 
-// A draft composite -> a real RiskComposite (weights parsed; NaN for bad input).
+// A draft composite -> a real RiskComposite (weights parsed; NaN for bad input). Display
+// fields (polarityLabel, builtin, configuredIn) are carried through unchanged — the UI
+// never edits them; the server preserves them on save from the on-disk config.
 function parse(d: DraftComposite): RiskComposite {
   return {
     id: d.id,
     label: d.label,
     invertPolarity: d.invertPolarity,
+    polarityLabel: d.polarityLabel,
     components: d.components.map((c) => ({
       id: c.id,
       label: c.label,
@@ -41,6 +44,8 @@ function parse(d: DraftComposite): RiskComposite {
       provenance: c.provenance,
       enabled: c.enabled,
       weight: Number.parseFloat(c.weightStr),
+      builtin: c.builtin,
+      configuredIn: c.configuredIn,
     })),
   };
 }
@@ -184,9 +189,7 @@ export function RiskModelSettings({
                     <ChevronRight className="h-4 w-4 text-muted-foreground" />
                   )}
                   <span className="font-medium text-foreground">{composite.label}</span>
-                  <Badge variant="outline">
-                    {composite.invertPolarity ? "higher = safer" : "higher = riskier"}
-                  </Badge>
+                  <Badge variant="outline">{composite.polarityLabel}</Badge>
                 </span>
                 {status.error ? (
                   <span className="text-xs font-medium text-destructive">Needs attention</span>
@@ -205,6 +208,12 @@ export function RiskModelSettings({
 
                   {composite.components.map((comp, cj) => {
                     const eff = status.effective?.[comp.id];
+                    // A built-in sub-score that is ITSELF produced by another composite
+                    // (risk_score -> performanceRisk): surface where it is configured and
+                    // that the two weight sets multiply, not add.
+                    const producer = comp.configuredIn
+                      ? parsed.find((c) => c.id === comp.configuredIn)
+                      : undefined;
                     return (
                       <div
                         key={comp.id}
@@ -233,8 +242,17 @@ export function RiskModelSettings({
                             <Badge variant={comp.provenance === "computed" ? "secondary" : "outline"}>
                               {comp.provenance}
                             </Badge>
+                            {comp.builtin && <Badge variant="outline">built-in</Badge>}
                           </div>
                           <p className="mt-0.5 text-xs text-muted-foreground">{comp.definition}</p>
+                          {producer && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              This sub-score is itself configured in{" "}
+                              <span className="font-medium">{producer.label}</span> below — those
+                              component weights <em>multiply</em> with this{" "}
+                              {eff != null ? pct(eff) : "weight"}, they do not add.
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">

@@ -20,12 +20,31 @@ export interface RiskComponent {
   provenance: "computed" | "lookup";
   enabled: boolean;
   weight: number; // 0..1
+  /**
+   * Marks a built-in sub-score (the performanceComposite dimensions) that is computed
+   * by scores.py and NOT formula-defined — so the future formula editor must not offer
+   * to edit its formula. Absent/false on the risk composites' components. Weight edit
+   * and enable/disable stay allowed; add/remove are not offered.
+   */
+  builtin?: boolean;
+  /**
+   * For a built-in sub-score that is ITSELF produced by another composite, the id of
+   * that composite (risk_score -> "performanceRisk"). The two weight sets multiply, not
+   * add; the UI surfaces this so the relationship is not mistaken for additive.
+   */
+  configuredIn?: string;
 }
 
 export interface RiskComposite {
-  id: "supplyRisk" | "performanceRisk";
+  id: "supplyRisk" | "performanceRisk" | "performanceComposite";
   label: string;
   invertPolarity: boolean;
+  /**
+   * Display badge copy for the score's direction (e.g. "higher = safer"). AUTHORITATIVE
+   * for the UI — never re-derive the badge from invertPolarity, which is a compute flag
+   * (whether to apply the 100-minus), a different concern from display text.
+   */
+  polarityLabel: string;
   components: RiskComponent[];
 }
 

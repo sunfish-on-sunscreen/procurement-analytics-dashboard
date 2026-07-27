@@ -12,13 +12,12 @@ hand-rolled), re-run the REAL scoring code, and measure:
       composite / performanceRisk (their score drives the zone median split).
 
 The scoring logic is NOT modified. Variants are produced by monkeypatching the config
-getter (risk_config.get_composite) and the composite-weight dict (scores.WEIGHTS) at
-runtime from THIS script — exactly the config-driven levers the model was built around
-— then restored. Nothing is written to the DB.
+getter (risk_config.get_composite) at runtime from THIS script — the ONE config-driven
+lever all three composites now share — then restored. Nothing is written to the DB.
 
-  supplyRisk        : supply_concentration 0.50 / cost_premium 0.25 / import_friction 0.25
-  performanceRisk   : country_distance 0.60 / roster_concentration 0.40 (composite Risk sub-score)
-  composite         : quality 0.30 / delivery 0.30 / process 0.22 / risk 0.18
+  supplyRisk           : supply_concentration 0.50 / cost_premium 0.25 / import_friction 0.25
+  performanceRisk      : country_distance 0.60 / roster_concentration 0.40 (composite Risk sub-score)
+  performanceComposite : quality 0.30 / delivery 0.30 / process 0.22 / risk 0.18
 
 Run:  python scripts/risk_weight_sensitivity.py
 """
@@ -72,20 +71,10 @@ def component_disabled(composite_id, component_id):
         risk_config.get_composite = real
 
 
-@contextlib.contextmanager
-def composite_dim_dropped(dim):
-    """Drop ONE dimension of the top-level composite and renormalize the other three
-    via the SAME resolve_effective_weights (WEIGHTS wrapped as a composite)."""
-    real = dict(scores.WEIGHTS)
-    wrapped = {
-        "id": "composite",
-        "components": [{"id": k, "weight": v, "enabled": k != dim} for k, v in real.items()],
-    }
-    scores.WEIGHTS = risk_config.resolve_effective_weights(wrapped)  # renorm over 3 enabled
-    try:
-        yield
-    finally:
-        scores.WEIGHTS = real
+# The top-level composite is now a config composite (performanceComposite), so its
+# drop-one uses the SAME component_disabled path as the two risk composites — no
+# scores.WEIGHTS monkeypatch. compute_scores reads performanceComposite through
+# risk_config.get_composite and renormalizes the survivors via resolve_effective_weights.
 
 
 # --------------------------------------------------------------------------- #
@@ -115,8 +104,8 @@ def supply_risk_map(purchases, suppliers, metrics):
 
 def window_metrics(purchases, suppliers, metrics):
     """Per-supplier scored frame via the REAL scores.build_window_metrics (reads the
-    live/patched performanceRisk config + scores.WEIGHTS). Returns {sid: (risk_score,
-    composite_score)}."""
+    live/patched performanceRisk + performanceComposite config). Returns {sid:
+    (risk_score, composite_score)}."""
     pur = scores.rename_purchase_columns(purchases)
     country_by_sid = (
         suppliers.rename(columns={"externalId": "supplierExternalId"})
@@ -216,7 +205,7 @@ def analyze_window(conn, label, start_ts, end_ts):
 
     # ---- top-level composite: Q/D/P/R (restate the >=0.72) ----
     for dim in ["quality_score", "delivery_score", "process_score", "risk_score"]:
-        with composite_dim_dropped(dim):
+        with component_disabled("performanceComposite", dim):
             v_wm = window_metrics(purchases, suppliers, metrics)
         v_comp = {s: v[1] for s, v in v_wm.items()}
         rho, n = spearman(base_comp, v_comp)
