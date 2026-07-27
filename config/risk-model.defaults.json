@@ -1,17 +1,47 @@
 {
-  "performanceComposite": {
-    "quality_score": { "weight": 0.30, "enabled": true },
-    "delivery_score": { "weight": 0.30, "enabled": true },
-    "process_score": { "weight": 0.22, "enabled": true },
-    "risk_score": { "weight": 0.18, "enabled": true }
+  "composites": {
+    "performanceComposite": {
+      "quality_score": { "weight": 0.30, "enabled": true },
+      "delivery_score": { "weight": 0.30, "enabled": true },
+      "process_score": { "weight": 0.22, "enabled": true },
+      "risk_score": { "weight": 0.18, "enabled": true }
+    },
+    "performanceRisk": {
+      "country_distance": { "weight": 0.60, "enabled": true },
+      "roster_concentration": { "weight": 0.40, "enabled": true }
+    },
+    "supplyRisk": {
+      "supply_concentration": { "weight": 0.50, "enabled": true },
+      "cost_premium": { "weight": 0.25, "enabled": true },
+      "import_friction": { "weight": 0.25, "enabled": true }
+    }
   },
-  "performanceRisk": {
-    "country_distance": { "weight": 0.60, "enabled": true },
-    "roster_concentration": { "weight": 0.40, "enabled": true }
-  },
-  "supplyRisk": {
-    "supply_concentration": { "weight": 0.50, "enabled": true },
-    "cost_premium": { "weight": 0.25, "enabled": true },
-    "import_friction": { "weight": 0.25, "enabled": true }
+  "lookupTables": {
+    "concentration_curve": {
+      "default": 0.0,
+      "rows": [
+        { "key": 0, "value": 100.0 },
+        { "key": 1, "value": 70.0 },
+        { "key": 2, "value": 44.0 },
+        { "key": 3, "value": 24.0 },
+        { "key": 4, "value": 10.0 }
+      ]
+    },
+    "country_distance": {
+      "default": 100.0,
+      "rows": [
+        { "key": "domestic", "value": 0.0, "members": ["ID", "INDONESIA"] },
+        { "key": "asean", "value": 30.0, "members": ["SG", "MY", "TH", "VN", "PH", "BN", "MM", "LA", "KH"] },
+        { "key": "asia_pacific", "value": 60.0, "members": ["CN", "JP", "KR", "AU", "NZ", "IN"] }
+      ]
+    },
+    "import_friction": {
+      "default": 100.0,
+      "rows": [
+        { "key": "domestic", "value": 0.0, "members": ["ID", "IDN", "INDONESIA"] },
+        { "key": "afta", "value": 32.0, "members": ["MY", "SG", "TH", "VN", "PH", "BN", "MM", "LA", "KH"] },
+        { "key": "rcep_non_asean", "value": 64.0, "members": ["JP", "KR", "CN", "AU", "NZ"] }
+      ]
+    }
   }
 }

@@ -102,7 +102,16 @@ export interface LookupRow {
  */
 export interface LookupTable {
   label: string;
+  /**
+   * Per-table content version; bumps when THIS table's own default/rows/members change
+   * (mergeAndBumpTableVersions). A table edit moves its CONSUMERS' fingerprints but NOT
+   * their versions — a shared table is no composite's own knob, so it versions itself and
+   * the fingerprint carries the transitive effect (same principle as composites). Lives in
+   * the config + the settings UI, NOT the report footer (which stays one line).
+   */
+  version: string;
   definition: string;
+  /** STRUCTURE, never user-editable: selects the match algorithm (count vs country). */
   input: "count" | "country";
   default: number; // 0..100
   rows: LookupRow[];
@@ -122,18 +131,28 @@ export interface RiskModel {
   composites: RiskComposite[];
 }
 
-/** Frozen default editable knobs (weight + enabled) per composite/component. The reset
- * target — the same source the byte-identical baseline is defined against. */
-export type RiskModelDefaults = Record<
-  string,
-  Record<string, { weight: number; enabled: boolean }>
->;
+/** Frozen default content for a lookup table (default value + rows). NOT its `version`
+ * (reset bumps the version like any save) and NOT input/label (structural/display,
+ * preserved from the live config). */
+export interface LookupTableDefault {
+  default: number;
+  rows: LookupRow[];
+}
+
+/** Frozen defaults: editable knobs (weight + enabled) per composite/component AND the
+ * content (default + rows) per lookup table. The reset target — the same source the
+ * byte-identical baseline is defined against. Reset restores BOTH, so a table edit cannot
+ * survive "reset to defaults" (a partial reset that reports success is worse than none). */
+export interface RiskModelDefaults {
+  composites: Record<string, Record<string, { weight: number; enabled: boolean }>>;
+  lookupTables: Record<string, LookupTableDefault>;
+}
 
 /** Float tolerance for the "weights sum to 1.0" checks (mirrors the Python side). */
 export const WEIGHT_SUM_TOL = 1e-9;
 
 export const RISK_MODEL: RiskModel = riskModelJson as unknown as RiskModel;
-export const RISK_MODEL_DEFAULTS: RiskModelDefaults = defaultsJson as RiskModelDefaults;
+export const RISK_MODEL_DEFAULTS: RiskModelDefaults = defaultsJson as unknown as RiskModelDefaults;
 
 /** Config schema (file-format) version from config/risk-model.json. */
 export const RISK_MODEL_SCHEMA_VERSION: string = RISK_MODEL.schemaVersion;
@@ -189,19 +208,25 @@ export function consumersOfTable(tableId: string, composites: RiskComposite[]): 
   return out.sort();
 }
 
-// COMPUTE-AFFECTING projection of ONE lookup table: input mode, default, and the rows'
-// key -> {value, members}. Rows are keyed by their key (canonical sorts them) and members
-// are sorted, so the projection depends only on the MAPPING, never on row/member order.
-// label/definition are display-only and excluded — "fingerprint changed" == "a number
-// (or a member assignment) changed".
-function projectLookupTable(table: LookupTable): Record<string, unknown> {
-  const rows: Record<string, unknown> = {};
-  for (const r of table.rows) {
-    rows[String(r.key)] = r.members
+// Compute-affecting content of a lookup table's default + rows, keyed by row key with
+// members sorted — depends only on the MAPPING, never on row/member order. Shared by the
+// fingerprint projection AND table-edit change detection so they can never disagree on
+// what "the same table" means.
+function projectTableContent(dflt: number, rows: LookupRow[]): Record<string, unknown> {
+  const projRows: Record<string, unknown> = {};
+  for (const r of rows) {
+    projRows[String(r.key)] = r.members
       ? { value: r.value, members: [...r.members].sort() }
       : { value: r.value };
   }
-  return { input: table.input, default: table.default, rows };
+  return { default: dflt, rows: projRows };
+}
+
+// COMPUTE-AFFECTING projection of ONE lookup table: input mode + its content. `version`
+// and label/definition are EXCLUDED — a version bump or relabel must not move a score's
+// fingerprint, so "fingerprint changed" == "a value or member assignment changed".
+function projectLookupTable(table: LookupTable): Record<string, unknown> {
+  return { input: table.input, ...projectTableContent(table.default, table.rows) };
 }
 
 // COMPUTE-AFFECTING projection of ONE composite: only the fields that change a score —
@@ -336,6 +361,126 @@ export function mergeAndBumpVersions(
     return { ...composite, components, version: nextVersion(composite.version) };
   });
   return { merged: { ...current, composites }, changedIds };
+}
+
+/** A per-table edit payload: the table id + its full editable content (default + rows). */
+export interface LookupTableEdit {
+  id: string;
+  default: number;
+  rows: LookupRow[];
+}
+
+/**
+ * Normalize a table edit to canonical storage: for a country table, members are trimmed,
+ * upper-cased, empties dropped and de-duped (so "vn" and " VN " never coexist and the
+ * fingerprint is stable); keys trimmed. For a count table, keys are coerced to integers.
+ * Values/default untouched. Does NOT validate — call lookupTableError for that.
+ */
+export function normalizeLookupTableEdit(
+  edit: LookupTableEdit,
+  input: "count" | "country",
+): LookupTableEdit {
+  const rows: LookupRow[] = edit.rows.map((r) => {
+    if (input === "country") {
+      const seen = new Set<string>();
+      const members: string[] = [];
+      for (const m of r.members ?? []) {
+        const code = String(m).trim().toUpperCase();
+        if (code && !seen.has(code)) {
+          seen.add(code);
+          members.push(code);
+        }
+      }
+      return { key: String(r.key).trim(), value: r.value, members };
+    }
+    return { key: Number(r.key), value: r.value };
+  });
+  return { id: edit.id, default: edit.default, rows };
+}
+
+/**
+ * Non-throwing validation of a lookup table's content — used by BOTH the settings UI (inline
+ * errors, block save) and the save route (400). Enforces: every value (rows + default) a
+ * number in [0,100]; row keys present + unique; for a `count` table the integer keys are
+ * CONTIGUOUS from 0 (a gap would silently fall through to the default — "no risk" for a real
+ * count); for a `country` table the members are DISJOINT across rows (else the code->row
+ * match is order-dependent and the score non-deterministic w.r.t. config order). A member
+ * matching no current supplier is NOT an error (it may be anticipated onboarding). Mirrors
+ * python/risk_config.validate_lookup_table. Returns a message, or null when valid.
+ */
+export function lookupTableError(table: {
+  input: string;
+  default: number;
+  rows: LookupRow[];
+}): string | null {
+  const inRange = (v: number) => Number.isFinite(v) && v >= 0 && v <= 100;
+  if (!inRange(table.default)) return "The default value must be a number between 0 and 100.";
+  const keys = new Set<string>();
+  for (const r of table.rows) {
+    const k = String(r.key).trim();
+    if (k === "") return "Every row needs a key.";
+    if (keys.has(k)) return `Duplicate row key "${k}".`;
+    keys.add(k);
+    if (!inRange(r.value)) return `Row "${k}": the value must be a number between 0 and 100.`;
+  }
+  if (table.input === "count") {
+    const ints = table.rows.map((r) => Number(r.key));
+    if (ints.some((n) => !Number.isInteger(n) || n < 0)) {
+      return "Count rows must have whole-number keys of 0 or more.";
+    }
+    const sorted = [...ints].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i++) {
+      if (sorted[i] !== i) {
+        return `Count rows must be contiguous from 0 (missing ${i}); a gap would fall through to the default.`;
+      }
+    }
+  } else {
+    const seen = new Map<string, string>();
+    for (const r of table.rows) {
+      for (const m of r.members ?? []) {
+        const code = String(m).trim().toUpperCase();
+        if (!code) continue;
+        const prior = seen.get(code);
+        if (prior !== undefined && prior !== String(r.key)) {
+          return `"${code}" is in both "${prior}" and "${r.key}" — members must be disjoint (the match would be order-dependent).`;
+        }
+        seen.set(code, String(r.key));
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Merge lookup-table edits into the config, bumping the `version` of ONLY the tables whose
+ * compute-affecting content (default/rows/members) actually changed. A shared table
+ * (concentration_curve) versions ITSELF here; NO composite version is bumped — the
+ * consumers' fingerprints already carry the effect. input/label/definition are preserved;
+ * an edit for an unknown table id is ignored (tables are curated, never created by an edit).
+ * Pure; the route does the file write + recompute.
+ */
+export function mergeAndBumpTableVersions(
+  current: RiskModel,
+  edits: LookupTableEdit[],
+): { merged: RiskModel; changedIds: string[] } {
+  const editById = new Map(edits.map((e) => [e.id, e]));
+  const changedIds: string[] = [];
+  const lookupTables: LookupTables = { ...current.lookupTables };
+  for (const [id, table] of Object.entries(current.lookupTables)) {
+    const edit = editById.get(id);
+    if (!edit) continue;
+    const before = canonical(projectTableContent(table.default, table.rows));
+    const after = canonical(projectTableContent(edit.default, edit.rows));
+    if (before === after) continue; // no compute-affecting change → no version bump
+    changedIds.push(id);
+    lookupTables[id] = {
+      ...table,
+      default: edit.default,
+      rows: edit.rows,
+      version: nextVersion(table.version),
+    };
+  }
+  return { merged: { ...current, lookupTables }, changedIds };
 }
 
 /**

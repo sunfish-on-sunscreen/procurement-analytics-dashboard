@@ -126,7 +126,7 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
   // Is the SAVED composite already at its shipped defaults? (Reset is offered only when not.)
   function activeAtDefaults(i: number): boolean {
     const a = active.composites[i];
-    const defs = RISK_MODEL_DEFAULTS[a.id];
+    const defs = RISK_MODEL_DEFAULTS.composites[a.id];
     if (!defs) return true;
     return a.components.every((c) => sameKnobs(c, defs[c.id]));
   }
@@ -134,7 +134,7 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
   // A composite whose knobs are the shipped defaults (for reset-to-defaults save).
   function defaultComposite(i: number): RiskComposite {
     const a = active.composites[i];
-    const defs = RISK_MODEL_DEFAULTS[a.id] ?? {};
+    const defs = RISK_MODEL_DEFAULTS.composites[a.id] ?? {};
     return {
       ...a,
       components: a.components.map((c) =>

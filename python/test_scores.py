@@ -101,6 +101,51 @@ def test_concentration_curve():
     assert scores.concentration_0_100(9) == 0.0
 
 
+def test_lookup_table_validation():
+    # The default config's three tables are valid (load_risk_model already validated
+    # them, but re-assert directly).
+    m = risk_config.load_risk_model()
+    assert set(m["lookupTables"]) == {"concentration_curve", "country_distance", "import_friction"}
+    for tid, table in m["lookupTables"].items():
+        risk_config.validate_lookup_table(tid, table)  # must not raise
+
+    # count table: keys must be CONTIGUOUS from 0 (a gap would fall through to default).
+    try:
+        risk_config.validate_lookup_table("t", {
+            "input": "count", "default": 0.0,
+            "rows": [{"key": 0, "value": 100.0}, {"key": 1, "value": 70.0}, {"key": 3, "value": 24.0}],
+        })
+        assert False, "expected a contiguity error for a count-key gap"
+    except ValueError as e:
+        assert "contiguous" in str(e)
+
+    # country table: members must be DISJOINT across rows (case-insensitively).
+    try:
+        risk_config.validate_lookup_table("t", {
+            "input": "country", "default": 100.0,
+            "rows": [{"key": "a", "value": 0.0, "members": ["ID"]},
+                     {"key": "b", "value": 30.0, "members": ["id"]}],
+        })
+        assert False, "expected a disjointness error for an overlapping member"
+    except ValueError as e:
+        assert "disjoint" in str(e)
+
+    # values (rows + default) must be in [0,100].
+    try:
+        risk_config.validate_lookup_table("t", {
+            "input": "count", "default": 0.0, "rows": [{"key": 0, "value": 150.0}]})
+        assert False, "expected a range error"
+    except ValueError as e:
+        assert "outside [0,100]" in str(e)
+
+    # a REQUIRED explicit default.
+    try:
+        risk_config.validate_lookup_table("t", {"input": "count", "rows": [{"key": 0, "value": 0.0}]})
+        assert False, "expected a missing-default error"
+    except ValueError as e:
+        assert "default" in str(e)
+
+
 def test_risk_config_renorm_on_disable():
     # Disabling a component redistributes its weight PROPORTIONALLY across the
     # survivors so the effective weights still sum to 1.0. supplyRisk defaults are

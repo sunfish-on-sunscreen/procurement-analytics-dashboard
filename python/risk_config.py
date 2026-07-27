@@ -103,17 +103,23 @@ def validate_composite(composite, tol=WEIGHT_SUM_TOL):
 
 
 def validate_lookup_table(table_id, table):
-    """Reject a malformed lookup table (fail-fast, mirroring validate_composite): a
-    REQUIRED explicit `default`, and every value (rows + default) a number in [0,100].
-    The <0 / >100 / NaN / inf cases are all caught by the `not 0 <= v <= 100` range
-    test. This enforces the 0-100 clamp at the AUTHORING boundary; the Stage B grid
-    editor blocks save on the same rule so an invalid value never reaches the file."""
+    """Reject a malformed lookup table (fail-fast, mirroring validate_composite):
+      - a REQUIRED explicit `default`, every value (rows + default) a number in [0,100]
+        (the <0 / >100 / NaN / inf cases all caught by `not 0 <= v <= 100`);
+      - row keys present + unique;
+      - a `count` table's integer keys CONTIGUOUS from 0 (a gap would silently fall
+        through to `default` -- e.g. "no risk" for a supplier with alternatives);
+      - a `country` table's `members` DISJOINT across rows (else the code->row match is
+        order-dependent, making the score non-deterministic w.r.t. config order).
+    Mirrors lib/risk-model.lookupTableError. Runs at LOAD, so a hand-edited config is
+    caught before it can reach a score; the grid editor blocks save on the same rules."""
     if "default" not in table:
         raise ValueError(
             f"risk-model lookup table '{table_id}': missing required 'default'"
         )
+    rows = table.get("rows", [])
     pairs = [("default", table["default"])]
-    for row in table.get("rows", []):
+    for row in rows:
         if "value" not in row:
             raise ValueError(
                 f"risk-model lookup table '{table_id}': a row is missing 'value'"
@@ -125,6 +131,36 @@ def validate_lookup_table(table_id, table):
                 f"risk-model lookup table '{table_id}' key {key!r}: value {value!r} "
                 f"outside [0,100]"
             )
+    keys = [str(row.get("key")) for row in rows]
+    if len(set(keys)) != len(keys):
+        raise ValueError(f"risk-model lookup table '{table_id}': duplicate row key")
+    input_mode = table.get("input")
+    if input_mode == "count":
+        try:
+            ints = sorted(int(row["key"]) for row in rows)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"risk-model lookup table '{table_id}': count keys must be integers >= 0"
+            ) from exc
+        if ints != list(range(len(ints))):
+            raise ValueError(
+                f"risk-model lookup table '{table_id}': count keys must be contiguous "
+                f"from 0 (a gap would silently fall through to default)"
+            )
+    elif input_mode == "country":
+        seen = {}
+        for row in rows:
+            for member in row.get("members", []):
+                code = str(member).strip().upper()
+                if not code:
+                    continue
+                prior = seen.get(code)
+                if prior is not None and prior != str(row.get("key")):
+                    raise ValueError(
+                        f"risk-model lookup table '{table_id}': member {code!r} in both "
+                        f"rows {prior!r} and {str(row.get('key'))!r} -- members must be disjoint"
+                    )
+                seen[code] = str(row.get("key"))
 
 
 def resolve_effective_weights(composite):
