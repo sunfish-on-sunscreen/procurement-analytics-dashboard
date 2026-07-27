@@ -11,6 +11,14 @@
  *  - Each composite carries its OWN `version`; a save bumps only the composites whose
  *    own components changed (see mergeAndBumpVersions). A top-level `schemaVersion` tracks
  *    the config FILE format, separate from the content versions.
+ *  - SCHEMA = FINGERPRINT SCOPE. A fingerprint is only comparable to one produced under
+ *    the SAME schemaVersion, because the version records what the fingerprint COVERS.
+ *    schema 2.1.0 (Stage A, commit fa7d75f) EXPANDED that scope to include lookup-table
+ *    values, so a 2.0.0 fingerprint and a 2.1.0 fingerprint differ at IDENTICAL weights
+ *    (RISK_MODEL_FINGERPRINT moved to e4db2d7e) without any score changing. Bump
+ *    schemaVersion whenever the projected scope changes, and stamp it beside the
+ *    fingerprint (the report footer does) so an old fingerprint stays interpretable
+ *    rather than a bare mismatch.
  *  - Fingerprints are DERIVED (never stored), over COMPUTE-AFFECTING fields only
  *    (weights, enabled, invertPolarity, derived dependsOn, and the resolved lookup-table
  *    values a lookup component references — NOT labels/definitions/polarityLabel/version),

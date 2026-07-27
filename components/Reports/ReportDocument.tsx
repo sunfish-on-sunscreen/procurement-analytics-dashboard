@@ -1337,14 +1337,17 @@ function ReportConfigStamp({ meta }: { meta: ReportMeta }) {
       <p>
         Risk model &mdash;{" "}
         <span className="text-foreground">{formatStampComposites(stamp)}</span> &middot;{" "}
+        schema v<span className="tabular-nums">{stamp.schemaVersion}</span> &middot;{" "}
         config <span className="tabular-nums">{stamp.fingerprint}</span> &middot; generated{" "}
         {generatedFmt.format(new Date(meta.generatedAt))}
       </p>
       <p>
         The weights that produced these scores are an organisational configuration, not
-        fixed constants. This report is reproducible from the composite versions and the
-        whole-config fingerprint above; a different configuration can move the quadrant
-        and zone labels.
+        fixed constants. This report is reproducible from the schema version, composite
+        versions and the whole-config fingerprint above; a fingerprint is only comparable
+        within the same schema version (the version records the fingerprint&apos;s
+        compute-affecting scope). A different configuration can move the quadrant and zone
+        labels.
       </p>
     </section>
   );
