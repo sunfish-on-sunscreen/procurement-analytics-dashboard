@@ -1,6 +1,43 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for the scoring weights: the top-level performanceComposite that blends the four supplier sub-scores, plus two risk composites (performanceRisk, which feeds the composite's risk_score component, and supplyRisk, the Kraljic Y-axis). Extracted from python/scores.py (composite + performanceRisk) and python/compute_analyses.py (supplyRisk) so every per-component weight is now an EXPLICIT normalized weight. For the risk composites each component's response curve is normalized to 0-100 in code and the WEIGHT here scales it; weight * 100 == the old point ceiling (country_distance 0.60->60, roster_concentration 0.40->40; supply_concentration 0.50->50, cost_premium 0.25->25, import_friction 0.25->25). performanceComposite is WEIGHTS ONLY: its components (quality_score/delivery_score/process_score/risk_score) are the EXISTING sub-scores computed by scores.py, not formula-defined, so they carry builtin:true and the future formula editor must never offer to edit their formula. Weights per composite MUST sum to 1.0. invertPolarity is a COMPUTE flag (=true applies the final 100-minus, performanceRisk higher=safer); performanceComposite uses invertPolarity=false because it is a weighted average of higher-is-better sub-scores (combine_score's clip is then a no-op). polarityLabel is the DISPLAY badge copy and is authoritative for the UI — never re-derive the badge from invertPolarity (they are different concerns: a compute flag vs display text). configuredIn links a built-in sub-score to the composite that PRODUCES it (risk_score -> performanceRisk); the two weight sets MULTIPLY, not add. ID CONVENTION (deliberate, not sloppiness): performanceComposite component ids ARE the scores.py column names (quality_score, delivery_score, process_score, risk_score) because these components are not formula-defined — they ARE those columns, and the id documenting exactly which column it reads is a feature, not a mapping layer that could drift. The risk composite ids (supply_concentration, cost_premium, ...) are unsuffixed because they are not columns. Consumed by python/risk_config.py (binding; reads weight/enabled/invertPolarity only) and lib/risk-model.ts (types + loader). VERSIONING (Stage 2): each composite carries its OWN `version` (bumped on save only when THAT composite's own components change); `schemaVersion` is the file-format version, separate. Fingerprints are DERIVED (never stored) over COMPUTE-AFFECTING fields only (weights, enabled, invertPolarity, derived dependsOn) — shortLabel/polarityLabel/label/definition/version/_comment are excluded, so a fingerprint change means the numbers changed. The printed report footer stamps ALL per-composite versions + one whole-config fingerprint. Defaults live in config/risk-model.defaults.json (the reset-to-defaults target; keep in sync with the shipped weights here). Do NOT change weights without re-recording every affected baseline in the same change.",
-  "schemaVersion": "2.0.0",
+  "_comment": "SINGLE SOURCE OF TRUTH for the scoring weights: the top-level performanceComposite that blends the four supplier sub-scores, plus two risk composites (performanceRisk, which feeds the composite's risk_score component, and supplyRisk, the Kraljic Y-axis). Extracted from python/scores.py (composite + performanceRisk) and python/compute_analyses.py (supplyRisk) so every per-component weight is now an EXPLICIT normalized weight. For the risk composites each component's response curve is normalized to 0-100 in code and the WEIGHT here scales it; weight * 100 == the old point ceiling (country_distance 0.60->60, roster_concentration 0.40->40; supply_concentration 0.50->50, cost_premium 0.25->25, import_friction 0.25->25). performanceComposite is WEIGHTS ONLY: its components (quality_score/delivery_score/process_score/risk_score) are the EXISTING sub-scores computed by scores.py, not formula-defined, so they carry builtin:true and the future formula editor must never offer to edit their formula. Weights per composite MUST sum to 1.0. invertPolarity is a COMPUTE flag (=true applies the final 100-minus, performanceRisk higher=safer); performanceComposite uses invertPolarity=false because it is a weighted average of higher-is-better sub-scores (combine_score's clip is then a no-op). polarityLabel is the DISPLAY badge copy and is authoritative for the UI — never re-derive the badge from invertPolarity (they are different concerns: a compute flag vs display text). configuredIn links a built-in sub-score to the composite that PRODUCES it (risk_score -> performanceRisk); the two weight sets MULTIPLY, not add. ID CONVENTION (deliberate, not sloppiness): performanceComposite component ids ARE the scores.py column names (quality_score, delivery_score, process_score, risk_score) because these components are not formula-defined — they ARE those columns, and the id documenting exactly which column it reads is a feature, not a mapping layer that could drift. The risk composite ids (supply_concentration, cost_premium, ...) are unsuffixed because they are not columns. Consumed by python/risk_config.py (binding; reads weight/enabled/invertPolarity only) and lib/risk-model.ts (types + loader). VERSIONING (Stage 2): each composite carries its OWN `version` (bumped on save only when THAT composite's own components change); `schemaVersion` is the file-format version, separate. Fingerprints are DERIVED (never stored) over COMPUTE-AFFECTING fields only (weights, enabled, invertPolarity, derived dependsOn) — shortLabel/polarityLabel/label/definition/version/_comment are excluded, so a fingerprint change means the numbers changed. The printed report footer stamps ALL per-composite versions + one whole-config fingerprint. Defaults live in config/risk-model.defaults.json (the reset-to-defaults target; keep in sync with the shipped weights here). Do NOT change weights without re-recording every affected baseline in the same change. LOOKUP TABLES (Stage A): the geographic + concentration lookups that used to be hardcoded in python/scores.py and python/compute_analyses.py now live in the top-level `lookupTables` block; a component references one by id via `lookupTable`. `concentration_curve` is SHARED by supplyRisk.supply_concentration AND performanceRisk.roster_concentration (one definition, two consumers -- editing it moves BOTH scores). country_distance and import_friction are deliberately SEPARATE tables (geography vs trade-agreement coverage). Each table carries key->value `rows` (with `members` = country codes for the geographic tables), an explicit REQUIRED `default`, and values validated to [0,100] at load. Read by python/risk_config.py (lookup_numeric / lookup_country) so scores.py and compute_analyses.py share ONE loader; table values are in the compute-affecting fingerprint scope (Stage 2), so editing the shared curve moves both consumers' compositeFingerprints. Table reset-to-defaults is not yet wired into config/risk-model.defaults.json (deferred to the Stage B grid editor).",
+  "schemaVersion": "2.1.0",
+  "lookupTables": {
+    "concentration_curve": {
+      "label": "Roster concentration curve",
+      "definition": "SHARED step curve on the number of OTHER suppliers in the same category across the full roster (active or not); fewer alternatives -> higher risk. Values are the normalized 0-100 axis (the old 0-50 points doubled: 50->100, 35->70, 22->44, 12->24, 5->10; the x2 that used to live in scores.concentration_0_100 is folded in here, bit-identical). Referenced by BOTH supplyRisk.supply_concentration AND performanceRisk.roster_concentration -- ONE definition, TWO consumers; editing it moves both scores, and is why the two risk scores correlate r=-0.852 (documented on the Methodology page). `input`=count: keyed by the integer other-in-category count; anything not listed (>=5, true abundance) falls through to `default` 0.",
+      "input": "count",
+      "default": 0.0,
+      "rows": [
+        { "key": 0, "value": 100.0 },
+        { "key": 1, "value": 70.0 },
+        { "key": 2, "value": 44.0 },
+        { "key": 3, "value": 24.0 },
+        { "key": 4, "value": 10.0 }
+      ]
+    },
+    "country_distance": {
+      "label": "Country distance tiers",
+      "definition": "Geographic supply-distance tier of the supplier's country (0 = domestic, 100 = far). Consumed by performanceRisk.country_distance. Deliberately SEPARATE from import_friction (geography, not trade blocs): India (IN) sits at 60 here (Asia-Pacific by geography) but at 100 on import_friction (outside RCEP since 2019) -- the divergence is intentional; do not unify. `input`=country: matched by ISO alpha-2 code (also full name for ID); any code in no row's `members` falls through to `default` 100.",
+      "input": "country",
+      "default": 100.0,
+      "rows": [
+        { "key": "domestic", "value": 0.0, "members": ["ID", "INDONESIA"] },
+        { "key": "asean", "value": 30.0, "members": ["SG", "MY", "TH", "VN", "PH", "BN", "MM", "LA", "KH"] },
+        { "key": "asia_pacific", "value": 60.0, "members": ["CN", "JP", "KR", "AU", "NZ", "IN"] }
+      ]
+    },
+    "import_friction": {
+      "label": "Import friction tiers",
+      "definition": "Indonesia trade-agreement coverage of the supplier's country (0 = domestic, 100 = no agreement). Consumed by supplyRisk.import_friction. Deliberately SEPARATE from country_distance (trade blocs, not geography): India is outside RCEP so lands at 100 here despite being Asia-Pacific (60) on distance. `input`=country: matched by ISO alpha-2 code (also IDN / full name for ID); any code in no row's `members` falls through to `default` 100.",
+      "input": "country",
+      "default": 100.0,
+      "rows": [
+        { "key": "domestic", "value": 0.0, "members": ["ID", "IDN", "INDONESIA"] },
+        { "key": "afta", "value": 32.0, "members": ["MY", "SG", "TH", "VN", "PH", "BN", "MM", "LA", "KH"] },
+        { "key": "rcep_non_asean", "value": 64.0, "members": ["JP", "KR", "CN", "AU", "NZ"] }
+      ]
+    }
+  },
   "composites": [
     {
       "id": "performanceComposite",
@@ -62,6 +99,7 @@
           "label": "Country distance",
           "definition": "Geographic supply-distance tier of the supplier's country. 0-100 lookup {Indonesia:0, ASEAN:30, Asia-Pacific:60, other:100}.",
           "provenance": "lookup",
+          "lookupTable": "country_distance",
           "enabled": true,
           "weight": 0.60
         },
@@ -70,6 +108,7 @@
           "label": "Roster concentration",
           "definition": "Roster-based supply concentration (the SAME curve as supplyRisk.supply_concentration), on the 0-100 axis {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
           "provenance": "lookup",
+          "lookupTable": "concentration_curve",
           "enabled": true,
           "weight": 0.40
         }
@@ -88,6 +127,7 @@
           "label": "Supply concentration",
           "definition": "Step curve on the number of OTHER suppliers in the same category across the full roster (active or not); fewer alternatives -> higher risk. Normalized curve {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
           "provenance": "lookup",
+          "lookupTable": "concentration_curve",
           "enabled": true,
           "weight": 0.50
         },
@@ -104,6 +144,7 @@
           "label": "Import friction",
           "definition": "Indonesia trade-agreement coverage of the supplier's country. Normalized {domestic:0, AFTA:32, RCEP-non-ASEAN:64, other:100}.",
           "provenance": "lookup",
+          "lookupTable": "import_friction",
           "enabled": true,
           "weight": 0.25
         }

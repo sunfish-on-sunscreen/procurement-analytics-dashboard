@@ -35,6 +35,8 @@ def load_risk_model(path=None):
         model = json.load(f)
     for composite in model["composites"]:
         validate_composite(composite)
+    for table_id, table in model.get("lookupTables", {}).items():
+        validate_lookup_table(table_id, table)
     return model
 
 
@@ -44,6 +46,48 @@ def get_composite(composite_id):
         if composite["id"] == composite_id:
             return composite
     raise KeyError(f"risk-model.json: no composite '{composite_id}'")
+
+
+# --------------------------------------------------------------------------- #
+# Lookup tables (Stage A) — the geographic + concentration lookups that were
+# hardcoded in scores.py / compute_analyses.py now live in config.lookupTables.
+# THIS is the ONE loader both files read (scores.country_distance_score /
+# concentration_0_100 and compute_analyses._import_friction_points all delegate
+# here), so there is no second load path. `concentration_curve` is SHARED by
+# supplyRisk.supply_concentration AND performanceRisk.roster_concentration.
+# --------------------------------------------------------------------------- #
+def get_lookup_table(table_id):
+    """Return the lookup table dict for a table id from config.lookupTables."""
+    tables = load_risk_model().get("lookupTables", {})
+    if table_id not in tables:
+        raise KeyError(f"risk-model.json: no lookup table '{table_id}'")
+    return tables[table_id]
+
+
+def lookup_numeric(table_id, key):
+    """Value for an INTEGER-keyed step table (e.g. concentration_curve). Any key not
+    listed -> the table's explicit `default`. Reproduces the old
+    `_CONC_POINTS.get(int(key), 0.0) * 2.0` exactly: the stored values ARE the already
+    doubled 0-100 axis (50->100, 35->70, ...), read straight back."""
+    table = get_lookup_table(table_id)
+    ikey = int(key)
+    for row in table["rows"]:
+        if int(row["key"]) == ikey:
+            return float(row["value"])
+    return float(table["default"])
+
+
+def lookup_country(table_id, code):
+    """Value for a COUNTRY-code table (country_distance / import_friction). Mirrors the
+    historical `str(code).strip().upper()` match against each row's `members`
+    (case-normalized on both sides); no match -> the explicit `default`. Members are
+    disjoint across rows in the shipped config, so row order is irrelevant."""
+    table = get_lookup_table(table_id)
+    c = str(code).strip().upper()
+    for row in table["rows"]:
+        if c in (str(m).strip().upper() for m in row.get("members", ())):
+            return float(row["value"])
+    return float(table["default"])
 
 
 def validate_composite(composite, tol=WEIGHT_SUM_TOL):
@@ -56,6 +100,31 @@ def validate_composite(composite, tol=WEIGHT_SUM_TOL):
             f"risk-model composite '{composite['id']}': component weights sum to "
             f"{total!r}, expected 1.0 (within {tol})"
         )
+
+
+def validate_lookup_table(table_id, table):
+    """Reject a malformed lookup table (fail-fast, mirroring validate_composite): a
+    REQUIRED explicit `default`, and every value (rows + default) a number in [0,100].
+    The <0 / >100 / NaN / inf cases are all caught by the `not 0 <= v <= 100` range
+    test. This enforces the 0-100 clamp at the AUTHORING boundary; the Stage B grid
+    editor blocks save on the same rule so an invalid value never reaches the file."""
+    if "default" not in table:
+        raise ValueError(
+            f"risk-model lookup table '{table_id}': missing required 'default'"
+        )
+    pairs = [("default", table["default"])]
+    for row in table.get("rows", []):
+        if "value" not in row:
+            raise ValueError(
+                f"risk-model lookup table '{table_id}': a row is missing 'value'"
+            )
+        pairs.append((row.get("key"), row["value"]))
+    for key, value in pairs:
+        if not (0.0 <= float(value) <= 100.0):
+            raise ValueError(
+                f"risk-model lookup table '{table_id}' key {key!r}: value {value!r} "
+                f"outside [0,100]"
+            )
 
 
 def resolve_effective_weights(composite):

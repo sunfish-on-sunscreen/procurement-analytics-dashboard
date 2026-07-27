@@ -1144,32 +1144,18 @@ def performance_spend_analysis(purchases, suppliers, metrics):
 # --------------------------------------------------------------------------- #
 # d) Kraljic matrix  (supply-risk score + quadrant assignment)
 # --------------------------------------------------------------------------- #
-# ASEAN ISO alpha-2 codes (data stores codes, not names).
-# Import-friction tiers reflect Indonesia's TRADE-AGREEMENT coverage (AFTA, RCEP)
-# — i.e. how easy/cheap it is to import from that origin — NOT geographic distance.
-AFTA_CODES = {"MY", "SG", "TH", "VN", "PH", "BN", "MM", "LA", "KH"}  # ASEAN free-trade area
-RCEP_NON_ASEAN = {"JP", "KR", "CN", "AU", "NZ"}  # RCEP partners outside ASEAN
-
-
 def _import_friction_points(country):
-    """Import friction NORMALIZED to 0..100 by trade-agreement coverage. Complete +
-    robust: any unmapped / unknown / empty code falls through to the explicit safe
-    default (100) so this can never error or return None. The supplyRisk weight (0.25)
-    scales this back onto the component's 0..25 contribution (100*0.25 == the old
-    ceiling), so the emitted import_friction is unchanged: 0/8/16/25.
-      ID                        -> 0    (domestic)
-      AFTA / ASEAN              -> 32
-      RCEP non-ASEAN            -> 64
-      everything else / unknown -> 100
+    """Import friction NORMALIZED to 0..100 by trade-agreement coverage. Stage A moved
+    the tiers into config/risk-model.json (lookupTables.import_friction); this thin
+    wrapper delegates to the ONE loader, risk_config — the SAME path scores.py's country
+    lookup uses (no second table). Complete + robust: any unmapped / unknown / empty code
+    falls through to the table's explicit `default` (100), so it never errors or returns
+    None. Values unchanged — ID -> 0, AFTA/ASEAN -> 32, RCEP non-ASEAN -> 64, else -> 100
+    (the supplyRisk weight 0.25 scales it onto the old 0..25 contribution). Deliberately
+    SEPARATE from scores.country_distance_score: trade blocs, not geography — India is
+    outside RCEP (100) here but Asia-Pacific (60) there.
     """
-    c = str(country).strip().upper()
-    if c in ("ID", "IDN", "INDONESIA"):
-        return 0.0
-    if c in AFTA_CODES:
-        return 32.0
-    if c in RCEP_NON_ASEAN:
-        return 64.0
-    return 100.0
+    return risk_config.lookup_country("import_friction", country)
 
 
 def _cost_premium_points(purchases):
@@ -1273,9 +1259,11 @@ def compute_supply_risk(purchases, suppliers, metrics):
     _w = risk_config.resolve_effective_weights(_cfg)  # THE shared renorm; guards all-disabled
 
     # 1. supply concentration: normalized roster step curve {0:100,1:70,2:44,3:24,4:10,
-    #    >=5:0} (scores.concentration_0_100 — the SAME curve performanceRisk uses),
-    #    weighted. Merges single-source status + competition into one roster-derived
-    #    measure: 0 other (true single source) -> 100*0.50 = 50, ..., >=5 -> 0.
+    #    >=5:0} via scores.concentration_0_100, which now reads the SHARED
+    #    `concentration_curve` lookup table in config (the SAME table performanceRisk's
+    #    roster_concentration reads), weighted. Merges single-source status + competition
+    #    into one roster-derived measure: 0 other (true single source) -> 100*0.50 = 50,
+    #    ..., >=5 -> 0.
     conc_norm = df["other_in_category"].map(lambda o: scores.concentration_0_100(int(o))).astype(float)
     c_conc = _w.get("supply_concentration", 0.0) * conc_norm
     # 2. cost premium: normalized clip(premium*250,0,100), period-scoped, benchmarked vs
@@ -1291,7 +1279,8 @@ def compute_supply_risk(purchases, suppliers, metrics):
     prem_map = _cost_premium_points(cost_input)
     prem_norm = df["supplierExternalId"].map(prem_map).fillna(0.0).astype(float)
     c_premium = _w.get("cost_premium", 0.0) * prem_norm
-    # 3. import friction: normalized {0,32,64,100} Indonesia trade-agreement coverage, weighted.
+    # 3. import friction: normalized {0,32,64,100} Indonesia trade-agreement coverage
+    #    (config lookupTables.import_friction, via _import_friction_points), weighted.
     fric_norm = df["country"].apply(_import_friction_points).astype(float)
     c_friction = _w.get("import_friction", 0.0) * fric_norm
 

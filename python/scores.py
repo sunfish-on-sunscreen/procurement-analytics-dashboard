@@ -54,38 +54,30 @@ SOFT_COLS = []
 
 
 # --- Score helpers (methodology rebuild) ---------------------------------- #
-# Geographic supply risk, coarse tiers 0 (safest) … 100 (riskiest) (Decision C).
-# The ASEAN tier lists ALL nine non-Indonesian ASEAN members (was missing BN/MM/LA/KH),
-# and NZ joins the Asia-Pacific tier alongside AU (was scoring 100). India stays in
-# Asia-Pacific — it is geographically Asia-Pacific; its RCEP exit (2019) only affects
-# import_friction's trade-bloc list, which is a separate, deliberately different scale.
+# Geographic supply distance + roster concentration were coarse hardcoded lookups
+# here; Stage A moved them into config/risk-model.json (lookupTables) and these thin
+# wrappers now delegate to the ONE loader, python/risk_config.py — so scores.py and
+# compute_analyses.py read the SAME tables (no second load path). The country tiers
+# (0 = domestic … 100 = far; India in Asia-Pacific by geography) live in the
+# `country_distance` table; its trade-bloc counterpart is the SEPARATE `import_friction`
+# table in compute_analyses.py — deliberately different scales (India is 60 here, 100
+# there). Signatures unchanged, so every call site (incl. transform_dataset's re-export)
+# is untouched.
 def country_distance_score(code: str) -> float:
-    c = str(code).strip().upper()
-    if c in ("ID", "INDONESIA"):
-        return 0.0
-    if c in ("SG", "MY", "TH", "VN", "PH", "BN", "MM", "LA", "KH"):  # ASEAN regional
-        return 30.0
-    if c in ("CN", "JP", "KR", "AU", "NZ", "IN"):  # Asia-Pacific
-        return 60.0
-    return 100.0  # other international
+    """Geographic supply-distance tier (config lookupTables.country_distance)."""
+    return risk_config.lookup_country("country_distance", code)
 
 
-# Roster-based supply concentration (D9-note). This MIRRORS the Kraljic
-# supply-risk `_CONC` step curve in python/compute_analyses.py
-# (compute_supply_risk): points on the # of OTHER suppliers in the same category
-# across the FULL roster (all known suppliers, active or not). There it maxes at
-# 50 (single source); here the composite's risk_score concentration term lives on
-# a 0-100 axis (it replaces the old single_source_risk*100 term), so we scale the
-# same curve x2. Endpoints reconcile with the old flag: 0 alternatives (true
-# single source) -> 100 (== old single_source_risk=1), >=5 alternatives -> 0
-# (== old single_source_risk=0); the middle is now graded instead of binary, and
-# it uses the SAME roster signal Kraljic uses so composite and Kraljic agree.
-_CONC_POINTS = {0: 50.0, 1: 35.0, 2: 22.0, 3: 12.0, 4: 5.0}
-
-
+# Roster-based supply concentration (D9-note): the SAME `concentration_curve` the
+# Kraljic supply-risk term reads (compute_supply_risk), so composite and Kraljic share
+# ONE signal. The config stores the already-doubled 0-100 axis {0:100, 1:70, 2:44,
+# 3:24, 4:10, >=5:0}; the old `_CONC_POINTS * 2` fold is baked into the stored values,
+# bit-identical (every product is an exact integer-valued double). 0 alternatives (true
+# single source) -> 100, >=5 -> 0; the middle is graded.
 def concentration_0_100(other_in_category: int) -> float:
-    """Roster-based supply concentration on the composite's 0-100 axis."""
-    return _CONC_POINTS.get(int(other_in_category), 0.0) * 2.0
+    """Roster-based supply concentration on the composite's 0-100 axis
+    (config lookupTables.concentration_curve)."""
+    return risk_config.lookup_numeric("concentration_curve", int(other_in_category))
 
 
 # Fixed-bound min-max normalization, clamped to [0,100] so inputs outside the

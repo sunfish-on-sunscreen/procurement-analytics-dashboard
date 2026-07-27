@@ -53,6 +53,7 @@ function parse(d: DraftComposite): RiskComposite {
       weight: Number.parseFloat(c.weightStr),
       builtin: c.builtin,
       configuredIn: c.configuredIn,
+      lookupTable: c.lookupTable,
     })),
   };
 }
@@ -110,7 +111,7 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
 
   const parsed = draft.map(parse);
   const statuses = parsed.map(statusOf);
-  const configFp = configFingerprint(active.composites);
+  const configFp = configFingerprint(active.composites, active.lookupTables);
 
   // Per-composite dirty: any component's weight/enabled differs from the SAVED (active).
   function isDirty(i: number): boolean {
@@ -249,7 +250,7 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
           const dirty = isDirty(ci);
           const saving = savingId === composite.id;
           const busy = savingId !== null;
-          const compositeFp = compositeFingerprint(composite.id, active.composites);
+          const compositeFp = compositeFingerprint(composite.id, active.composites, active.lookupTables);
           const canReset = !activeAtDefaults(ci);
           const confirming = confirmingResetId === composite.id;
           const err = errorById[composite.id];
@@ -457,7 +458,7 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
             <div key={composite.id} className="mt-2">
               <p className="text-sm font-medium text-foreground">
                 {composite.label} — v{composite.version} ·{" "}
-                {compositeFingerprint(composite.id, active.composites)}
+                {compositeFingerprint(composite.id, active.composites, active.lookupTables)}
               </p>
               <table className="w-full text-xs">
                 <thead>

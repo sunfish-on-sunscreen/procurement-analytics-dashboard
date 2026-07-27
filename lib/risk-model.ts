@@ -12,10 +12,11 @@
  *    own components changed (see mergeAndBumpVersions). A top-level `schemaVersion` tracks
  *    the config FILE format, separate from the content versions.
  *  - Fingerprints are DERIVED (never stored), over COMPUTE-AFFECTING fields only
- *    (weights, enabled, invertPolarity, derived dependsOn — NOT labels/definitions/
- *    polarityLabel/version), so "fingerprint changed" means "the numbers changed".
+ *    (weights, enabled, invertPolarity, derived dependsOn, and the resolved lookup-table
+ *    values a lookup component references — NOT labels/definitions/polarityLabel/version),
+ *    so "fingerprint changed" means "the numbers changed".
  *  - configFingerprint (whole config) is the report-footer + drift anchor. It covers
- *    everything, including future lookup tables, with no format change.
+ *    everything, including the lookup tables (Stage A), with no format change.
  *  - compositeFingerprint is dependency-aware (over the composite AND its transitive
  *    deps), so editing performanceRisk changes performanceComposite's fingerprint even
  *    though its own components are untouched — used for settings-UI audit granularity.
@@ -43,6 +44,16 @@ export interface RiskComponent {
    * (dependenciesOf derives the graph from it); the two weight sets multiply, not add.
    */
   configuredIn?: string;
+  /**
+   * For a `provenance: "lookup"` component, the id of the top-level `lookupTables` entry
+   * that supplies its 0-100 value (e.g. roster_concentration -> "concentration_curve").
+   * A table may be SHARED: concentration_curve backs BOTH supplyRisk.supply_concentration
+   * AND performanceRisk.roster_concentration, so editing it moves both scores. The
+   * fingerprint resolves this reference (projectComputeAffecting inlines the referenced
+   * table's values under the component), so a shared-table edit moves EVERY consumer's
+   * fingerprint. Absent on computed components (cost_premium) and the built-in dimensions.
+   */
+  lookupTable?: string;
 }
 
 export interface RiskComposite {
@@ -62,9 +73,44 @@ export interface RiskComposite {
   components: RiskComponent[];
 }
 
+/**
+ * One row of a lookup table: a key mapped to a 0-100 value. Geographic (country) tables
+ * also carry `members` — the ISO codes that resolve to this row's value. Numeric (count)
+ * tables omit `members` (the integer key IS the input).
+ */
+export interface LookupRow {
+  key: string | number;
+  value: number; // 0..100 (validated at load)
+  members?: string[];
+}
+
+/**
+ * A named value curve in the top-level `lookupTables` block — the config home of a lookup
+ * that used to be hardcoded in Python (Stage A). `input` selects the match algorithm
+ * ("count" = integer step curve, e.g. concentration_curve; "country" = ISO-code
+ * membership, e.g. country_distance / import_friction). `default` is REQUIRED and applies
+ * to any key no row matches. A table may be referenced by more than one component
+ * (concentration_curve is SHARED — see consumersOfTable); edit it once, every consumer moves.
+ */
+export interface LookupTable {
+  label: string;
+  definition: string;
+  input: "count" | "country";
+  default: number; // 0..100
+  rows: LookupRow[];
+}
+
+export type LookupTables = Record<string, LookupTable>;
+
 export interface RiskModel {
   /** Config FILE-FORMAT version, separate from the per-composite content versions. */
   schemaVersion: string;
+  /**
+   * Named value curves referenced by `provenance: "lookup"` components (Stage A). A table
+   * is SHARED when its id appears on more than one component — concentration_curve backs
+   * both risk composites' concentration terms.
+   */
+  lookupTables: LookupTables;
   composites: RiskComposite[];
 }
 
@@ -117,18 +163,71 @@ export function dependenciesOf(composite: RiskComposite): string[] {
   return [...deps].sort();
 }
 
+/**
+ * The components that reference a given lookup table, as "compositeId.componentId" strings
+ * (sorted). A table with MORE THAN ONE consumer is SHARED: concentration_curve returns both
+ * "performanceRisk.roster_concentration" and "supplyRisk.supply_concentration". The settings
+ * grid (Stage B) uses this to name every composite an edit will move, so nobody edits a
+ * shared curve thinking it is local to one composite. Derived from the references — there is
+ * no stored consumer list to drift.
+ */
+export function consumersOfTable(tableId: string, composites: RiskComposite[]): string[] {
+  const out: string[] = [];
+  for (const composite of composites) {
+    for (const c of composite.components) {
+      if (c.lookupTable === tableId) out.push(`${composite.id}.${c.id}`);
+    }
+  }
+  return out.sort();
+}
+
+// COMPUTE-AFFECTING projection of ONE lookup table: input mode, default, and the rows'
+// key -> {value, members}. Rows are keyed by their key (canonical sorts them) and members
+// are sorted, so the projection depends only on the MAPPING, never on row/member order.
+// label/definition are display-only and excluded — "fingerprint changed" == "a number
+// (or a member assignment) changed".
+function projectLookupTable(table: LookupTable): Record<string, unknown> {
+  const rows: Record<string, unknown> = {};
+  for (const r of table.rows) {
+    rows[String(r.key)] = r.members
+      ? { value: r.value, members: [...r.members].sort() }
+      : { value: r.value };
+  }
+  return { input: table.input, default: table.default, rows };
+}
+
 // COMPUTE-AFFECTING projection of ONE composite: only the fields that change a score —
-// invertPolarity, the derived dependency list, and per component {enabled, weight}.
-// Deliberately excludes label/definition/provenance/builtin/polarityLabel/shortLabel/
-// version. (Stage 4 adds bounds / lookup values under each component here.)
-function projectComputeAffecting(composite: RiskComposite): Record<string, unknown> {
+// invertPolarity, the derived dependency list, and per component {enabled, weight, and
+// the RESOLVED lookup table for a lookup component}. Deliberately excludes label/
+// definition/provenance/builtin/polarityLabel/shortLabel/version.
+// (Stage A adds the resolved lookup values under each lookup component here; Stage D
+// will add per-component formula bounds the same way.)
+function projectComputeAffecting(
+  composite: RiskComposite,
+  lookupTables: LookupTables,
+): Record<string, unknown> {
   const components: Record<string, unknown> = {};
   for (const c of composite.components) {
     // A DISABLED component's weight is dropped by resolveEffectiveWeights, so it reaches
-    // no score — omit it so the fingerprint tracks EXACTLY the values that determine the
-    // numbers. Editing a parked (disabled) weight must not move the fingerprint; it would
-    // otherwise bump a version + trigger a recompute for byte-identical output.
-    components[c.id] = c.enabled ? { enabled: true, weight: c.weight } : { enabled: false };
+    // no score — omit it (and its lookup) so the fingerprint tracks EXACTLY the values
+    // that determine the numbers. Editing a parked (disabled) weight or its table must
+    // not move the fingerprint; it would otherwise bump a version + trigger a recompute
+    // for byte-identical output.
+    if (!c.enabled) {
+      components[c.id] = { enabled: false };
+      continue;
+    }
+    const entry: Record<string, unknown> = { enabled: true, weight: c.weight };
+    // Resolve + inline the referenced table's values, so editing a SHARED table
+    // (concentration_curve) moves the fingerprint of EVERY composite referencing it —
+    // supplyRisk AND performanceRisk directly, and performanceComposite transitively
+    // through its risk_score dependency. `missing` keeps the projection defined if a
+    // reference dangles (a malformed edit) rather than silently dropping the table.
+    if (c.lookupTable) {
+      const table = lookupTables[c.lookupTable];
+      entry.lookup = table ? projectLookupTable(table) : { missing: c.lookupTable };
+    }
+    components[c.id] = entry;
   }
   return {
     invertPolarity: composite.invertPolarity,
@@ -143,9 +242,12 @@ function projectComputeAffecting(composite: RiskComposite): Record<string, unkno
  * changes anywhere (incl. a dependency edit, or — in Stage 4 — a lookup value), even if
  * a version bump was forgotten. Independent of labels and version strings.
  */
-export function configFingerprint(composites: RiskComposite[]): string {
+export function configFingerprint(
+  composites: RiskComposite[],
+  lookupTables: LookupTables,
+): string {
   const proj: Record<string, unknown> = {};
-  for (const c of composites) proj[c.id] = projectComputeAffecting(c);
+  for (const c of composites) proj[c.id] = projectComputeAffecting(c, lookupTables);
   return fnv1a(canonical(proj));
 }
 
@@ -156,7 +258,11 @@ export function configFingerprint(composites: RiskComposite[]): string {
  * — the settings UI shows this per composite for audit granularity. Cycle-guarded per
  * path (the graph is a DAG today).
  */
-export function compositeFingerprint(id: string, composites: RiskComposite[]): string {
+export function compositeFingerprint(
+  id: string,
+  composites: RiskComposite[],
+  lookupTables: LookupTables,
+): string {
   const byId = new Map<string, RiskComposite>(composites.map((c) => [c.id, c]));
   const build = (cid: string, path: Set<string>): unknown => {
     if (path.has(cid)) return { cycle: cid };
@@ -165,13 +271,16 @@ export function compositeFingerprint(id: string, composites: RiskComposite[]): s
     const next = new Set(path).add(cid);
     const deps: Record<string, unknown> = {};
     for (const d of dependenciesOf(c)) deps[d] = build(d, next);
-    return { self: projectComputeAffecting(c), deps };
+    return { self: projectComputeAffecting(c, lookupTables), deps };
   };
   return fnv1a(canonical(build(id, new Set())));
 }
 
 /** Build-time whole-config fingerprint of the bundled config (a fallback default). */
-export const RISK_MODEL_FINGERPRINT: string = configFingerprint(RISK_MODEL.composites);
+export const RISK_MODEL_FINGERPRINT: string = configFingerprint(
+  RISK_MODEL.composites,
+  RISK_MODEL.lookupTables,
+);
 
 /**
  * Next per-composite version on save: bump the patch segment of a semver string
@@ -234,7 +343,7 @@ export interface ConfigStamp {
 export function buildConfigStamp(model: RiskModel): ConfigStamp {
   return {
     schemaVersion: model.schemaVersion,
-    fingerprint: configFingerprint(model.composites),
+    fingerprint: configFingerprint(model.composites, model.lookupTables),
     composites: model.composites.map((c) => ({
       id: c.id,
       shortLabel: c.shortLabel,
