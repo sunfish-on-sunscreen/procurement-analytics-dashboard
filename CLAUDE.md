@@ -370,10 +370,13 @@ or period** — that is the dead metric above.
   false alarm before being pinned down.
 
 - **Methodology §9** documents the split, the shift-share identity, and all eight
-  exclusions with their numbers — but ⚠️ **`/methodology` is gated behind
-  `SHOW_METHODOLOGY = false`, so §9 is currently UNREACHABLE.** A condensed tone-aware
-  exclusions paragraph is therefore ALSO carried in the report appendix (a surface the
-  flag does not affect). **Keep the two in sync**; if the flag flips, both are live.
+  exclusions with their numbers. ⚠️ **`SHOW_METHODOLOGY` is now `true` (flipped
+  false→true in `5427c2c`, 2026-07-24), so `/methodology` — and §9 — IS reachable.**
+  A condensed tone-aware exclusions paragraph is ALSO carried in the report appendix (a
+  surface the flag never affected). **Keep the two in sync** — both are live. *(This line
+  previously read "gated behind SHOW_METHODOLOGY = false, so §9 is UNREACHABLE"; that was
+  stale after the 2026-07-24 flip and misled a later session into a wrong report — always
+  verify a flag's LIVE value, never trust this doc for it.)*
 - **⚠️ VERIFIED (2026-07-23).** Baseline byte-identical at every stage and all SIX
   pre-existing analyses byte-identical across 2024/2025/2026/range in BOTH modes (Mode
   A 18 stored payloads, Mode B 24 comparisons) — the control proving the type is purely
