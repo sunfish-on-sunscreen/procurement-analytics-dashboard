@@ -12,13 +12,19 @@ import {
   resolveEffectiveWeights,
   configFingerprint,
   compositeFingerprint,
+  consumersOfTable,
+  nextVersion,
+  normalizeLookupTableEdit,
   WEIGHT_SUM_TOL,
   RISK_MODEL_DEFAULTS,
   type RiskModel,
   type RiskComposite,
   type RiskComponent,
   type ConfigStamp,
+  type LookupTableEdit,
+  type LookupCoverageInputs,
 } from "@/lib/risk-model";
+import { LookupTableCard } from "@/components/Methodology/LookupTableCard";
 
 // The draft keeps each weight as a STRING so the input types smoothly ("0.", "0.5");
 // it is parsed to a number for the live renormalization + validation.
@@ -99,7 +105,13 @@ function sameKnobs(
   return !!b && a.enabled === b.enabled && a.weight === b.weight;
 }
 
-export function RiskModelSettings({ initialModel }: { initialModel: RiskModel }) {
+export function RiskModelSettings({
+  initialModel,
+  coverageInputs,
+}: {
+  initialModel: RiskModel;
+  coverageInputs: LookupCoverageInputs;
+}) {
   const [active, setActive] = useState<RiskModel>(initialModel);
   const [draft, setDraft] = useState<DraftComposite[]>(() => toDraft(initialModel.composites));
   const [open, setOpen] = useState<Set<string>>(
@@ -232,6 +244,65 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
     await saveComposite(dc);
   }
 
+  // Readable consumer descriptors for a lookup table ("supply-risk · Supply concentration"),
+  // derived from consumersOfTable (never hardcoded) so a shared table names both consumers.
+  function consumerDescriptors(tableId: string): string[] {
+    return consumersOfTable(tableId, active.composites).map((ref) => {
+      const [cid, compId] = ref.split(".");
+      const composite = active.composites.find((c) => c.id === cid);
+      const component = composite?.components.find((x) => x.id === compId);
+      return `${composite?.shortLabel ?? cid} · ${component?.label ?? compId}`;
+    });
+  }
+
+  // Save ONE lookup table (its own scope — a shared table cannot be saved by a composite's
+  // Save button). Shares the global `savingId` lock so no two recomputes overlap. On success
+  // updates active with the normalized content + the bumped table version (deterministic —
+  // the server bumps identically), which re-derives the whole-config fingerprint and remounts
+  // the card (keyed by version). Returns an error message, or null on success.
+  async function saveTable(id: string, edit: LookupTableEdit): Promise<string | null> {
+    setSavingId(id);
+    try {
+      const res = await fetch("/api/risk-model", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lookupTables: [edit] }),
+      });
+      const data = (await res.json()) as { changedIds?: string[]; error?: string };
+      if (!res.ok) {
+        toast.error(data.error ?? "Save failed.");
+        return data.error ?? "Save failed.";
+      }
+      const label = active.lookupTables[id]?.label ?? id;
+      setActive((prev) => {
+        const table = prev.lookupTables[id];
+        if (!table) return prev;
+        const norm = normalizeLookupTableEdit(edit, table.input);
+        const changed = (data.changedIds ?? []).includes(id);
+        return {
+          ...prev,
+          lookupTables: {
+            ...prev.lookupTables,
+            [id]: {
+              ...table,
+              default: norm.default,
+              rows: norm.rows,
+              version: changed ? nextVersion(table.version) : table.version,
+            },
+          },
+        };
+      });
+      toast.success(`Saved ${label}. All periods recomputed.`);
+      return null;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Network error.";
+      toast.error(msg);
+      return msg;
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4">
       {/* Active whole-config identity — schema + the fingerprint printed reports carry. */}
@@ -339,6 +410,16 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
                               {eff != null ? pct(eff) : "weight"}, they do not add.
                             </p>
                           )}
+                          {comp.lookupTable && (
+                            <p className="mt-1 text-xs text-muted-foreground">
+                              Reads the{" "}
+                              <span className="font-medium">
+                                {active.lookupTables[comp.lookupTable]?.label ?? comp.lookupTable}
+                              </span>{" "}
+                              lookup table (in <span className="font-medium">Lookup tables</span>{" "}
+                              below).
+                            </p>
+                          )}
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">
@@ -444,6 +525,37 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
           composite&apos;s version, and recomputes every period. There is no role restriction
           and no undo — the printed report footer is the only record of a prior configuration.
         </p>
+
+        {/* LOOKUP TABLES — their own subsection with per-table Save / Discard / Reset. A
+            shared curve is no single composite's knob, so it versions and saves itself. */}
+        <div className="mt-2 flex flex-col gap-3 border-t pt-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Lookup tables</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              The 0–100 response curves the risk components read. Each table versions itself
+              and has its own Save. Coverage shows how many of the{" "}
+              {coverageInputs.totalSuppliers} current suppliers each row matches, so a row
+              that never fires is visible while you edit.
+            </p>
+          </div>
+          {Object.entries(active.lookupTables).map(([id, table]) => {
+            const defaults = RISK_MODEL_DEFAULTS.lookupTables[id];
+            if (!defaults) return null;
+            return (
+              <LookupTableCard
+                key={`${id}:${table.version}`}
+                tableId={id}
+                table={table}
+                defaults={defaults}
+                coverageInputs={coverageInputs}
+                consumers={consumerDescriptors(id)}
+                busy={savingId !== null}
+                saving={savingId === id}
+                onSave={(edit) => saveTable(id, edit)}
+              />
+            );
+          })}
+        </div>
       </div>
 
       {/* PRINT-ONLY STATIC SUMMARY — no toggles, no inputs; just the active values. */}
@@ -482,6 +594,43 @@ export function RiskModelSettings({ initialModel }: { initialModel: RiskModel })
                       <td className="py-1">{comp.enabled ? "enabled" : "disabled"}</td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          );
+        })}
+        {Object.entries(active.lookupTables).map(([id, table]) => {
+          const consumers = consumerDescriptors(id);
+          const isCountry = table.input === "country";
+          return (
+            <div key={id} className="mt-2">
+              <p className="text-sm font-medium text-foreground">
+                {table.label} — v{table.version}
+                {consumers.length > 0 && (
+                  <span className="text-muted-foreground"> · used by {consumers.join(", ")}</span>
+                )}
+              </p>
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-left text-foreground">
+                    <th className="py-1 pr-3 font-medium">{isCountry ? "Tier" : "Alternatives"}</th>
+                    <th className="py-1 pr-3 text-right font-medium">Value</th>
+                    {isCountry && <th className="py-1 font-medium">Members</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {table.rows.map((r) => (
+                    <tr key={String(r.key)} className="border-b">
+                      <td className="py-1 pr-3">{String(r.key)}</td>
+                      <td className="py-1 pr-3 text-right tabular-nums">{r.value}</td>
+                      {isCountry && <td className="py-1">{(r.members ?? []).join(", ")}</td>}
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="py-1 pr-3 text-muted-foreground">everything else</td>
+                    <td className="py-1 pr-3 text-right tabular-nums">{table.default}</td>
+                    {isCountry && <td className="py-1" />}
+                  </tr>
                 </tbody>
               </table>
             </div>

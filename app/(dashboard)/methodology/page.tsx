@@ -10,6 +10,7 @@ import {
 import { cardElevation } from "@/lib/utils";
 import { SHOW_METHODOLOGY } from "@/lib/feature-flags";
 import { readRiskModel } from "@/lib/risk-model-server";
+import { getLookupCoverageInputs } from "@/lib/risk-model-coverage";
 import { RiskModelSettings } from "@/components/Methodology/RiskModelSettings";
 
 // ONE source of truth for section identity: number (shown in the heading and in a
@@ -134,7 +135,10 @@ export default async function MethodologyPage() {
   if (!SHOW_METHODOLOGY) notFound();
 
   await requireAuth();
-  const riskModel = await readRiskModel();
+  const [riskModel, coverageInputs] = await Promise.all([
+    readRiskModel(),
+    getLookupCoverageInputs(),
+  ]);
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
@@ -762,7 +766,7 @@ export default async function MethodologyPage() {
               active config version and generation date, so a printout is reproducible
               from its stamp.
             </p>
-            <RiskModelSettings initialModel={riskModel} />
+            <RiskModelSettings initialModel={riskModel} coverageInputs={coverageInputs} />
           </section>
 
           <section id="risk-score" className="space-y-2">

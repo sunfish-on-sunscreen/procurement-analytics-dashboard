@@ -371,6 +371,24 @@ export interface LookupTableEdit {
 }
 
 /**
+ * True iff two lookup-table CONTENTS (default + rows) are compute-equal — same mapping,
+ * ignoring row and member order. This is the EXACT test mergeAndBumpTableVersions uses to
+ * decide a version bump, exported so the settings UI's dirty detection matches the server's
+ * decision: a member reorder is not a change (won't enable Save, won't bump a version).
+ */
+export function tableContentEqual(
+  aDefault: number,
+  aRows: LookupRow[],
+  bDefault: number,
+  bRows: LookupRow[],
+): boolean {
+  return (
+    canonical(projectTableContent(aDefault, aRows)) ===
+    canonical(projectTableContent(bDefault, bRows))
+  );
+}
+
+/**
  * Normalize a table edit to canonical storage: for a country table, members are trimmed,
  * upper-cased, empties dropped and de-duped (so "vn" and " VN " never coexist and the
  * fingerprint is stable); keys trimmed. For a count table, keys are coerced to integers.
@@ -481,6 +499,49 @@ export function mergeAndBumpTableVersions(
     };
   }
   return { merged: { ...current, lookupTables }, changedIds };
+}
+
+/**
+ * Roster inputs for per-row lookup coverage (how many suppliers each row / the default
+ * matches). Server-derived from the Supplier roster and passed to the settings UI so a
+ * never-firing row is visible WHILE editing. `countryCounts[CODE]` = # suppliers with that
+ * country; `concentrationDist[k]` = # suppliers whose category has k OTHER members.
+ */
+export interface LookupCoverageInputs {
+  totalSuppliers: number;
+  countryCounts: Record<string, number>;
+  concentrationDist: Record<number, number>;
+}
+
+/**
+ * Per-row + default coverage for a table's CURRENT (draft) rows against the roster. Pure +
+ * client-safe, so it recomputes as the user edits members and a 0-coverage (never-fires)
+ * row shows immediately. Country: sum of countryCounts over each row's members (normalized
+ * upper/trim); default = suppliers whose country is in no row. Count: concentrationDist at
+ * each integer key; default = suppliers whose other-count is not a listed key.
+ */
+export function lookupCoverage(
+  input: "count" | "country",
+  rows: LookupRow[],
+  inputs: LookupCoverageInputs,
+): { perRow: number[]; default: number } {
+  if (input === "country") {
+    let matched = 0;
+    const perRow = rows.map((r) => {
+      let c = 0;
+      for (const m of r.members ?? []) c += inputs.countryCounts[String(m).trim().toUpperCase()] ?? 0;
+      matched += c;
+      return c;
+    });
+    return { perRow, default: Math.max(0, inputs.totalSuppliers - matched) };
+  }
+  const listed = new Set(rows.map((r) => Number(r.key)));
+  const perRow = rows.map((r) => inputs.concentrationDist[Number(r.key)] ?? 0);
+  let dflt = 0;
+  for (const [k, n] of Object.entries(inputs.concentrationDist)) {
+    if (!listed.has(Number(k))) dflt += n;
+  }
+  return { perRow, default: dflt };
 }
 
 /**
