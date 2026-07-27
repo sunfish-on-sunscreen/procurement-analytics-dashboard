@@ -8,11 +8,16 @@ import {
 } from "@/components/ui/card";
 import { cardElevation } from "@/lib/utils";
 import { SHOW_METHODOLOGY } from "@/lib/feature-flags";
+import { fingerprintComposites } from "@/lib/risk-model";
+import { readRiskModel } from "@/lib/risk-model-server";
+import { RiskModelSettings } from "@/components/Methodology/RiskModelSettings";
 
 export default async function MethodologyPage() {
   if (!SHOW_METHODOLOGY) notFound();
 
   await requireAuth();
+  const riskModel = await readRiskModel();
+  const riskFingerprint = fingerprintComposites(riskModel.composites);
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
@@ -635,6 +640,24 @@ export default async function MethodologyPage() {
               That matrix needs an expert panel to fill it, which is the input this
               project does not have.
             </p>
+          </section>
+
+          <section className="space-y-3">
+            <h3 className="text-base font-semibold text-foreground">
+              4.2a Weight configuration
+            </h3>
+            <p>
+              The weights above are editable here — this is the organisational
+              calibration the provenance note describes. Adjusting a weight or disabling
+              a component saves a new config version and recomputes every period; the
+              report footer then stamps that version, so a printed result stays traceable
+              to the configuration that produced it. Every value is a default pending
+              organisational input.
+            </p>
+            <RiskModelSettings
+              initialModel={riskModel}
+              initialFingerprint={riskFingerprint}
+            />
           </section>
 
           <section className="space-y-2">

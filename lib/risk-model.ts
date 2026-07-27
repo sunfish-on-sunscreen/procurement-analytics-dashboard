@@ -66,11 +66,33 @@ function fnv1a(input: string): string {
 }
 
 /**
- * Content fingerprint of the composites (weights + enabled + polarity), independent of
- * the declared version. Two configs with the same weights share a fingerprint; changing
- * any weight changes it — even if someone forgets to bump `version`.
+ * Content fingerprint of a set of composites (weights + enabled + polarity),
+ * independent of the declared version. Two configs with the same weights share a
+ * fingerprint; changing any weight changes it — even if someone forgets to bump
+ * `version`. Pure + deterministic, so the server (reading the live file) and the
+ * settings UI (previewing an edit) compute the same value.
  */
-export const RISK_MODEL_FINGERPRINT: string = fnv1a(canonical(RISK_MODEL.composites));
+export function fingerprintComposites(composites: RiskComposite[]): string {
+  return fnv1a(canonical(composites));
+}
+
+/** Build-time fingerprint of the bundled config (a fallback default). */
+export const RISK_MODEL_FINGERPRINT: string = fingerprintComposites(RISK_MODEL.composites);
+
+/**
+ * Next config version on save: `rc-{YYYYMMDD}-{n}`, where n increments within a day.
+ * If `current` already names today (`rc-{today}-{k}`), returns k+1; otherwise 1. Pure —
+ * the caller passes today's date so this stays deterministic and testable.
+ */
+export function nextConfigVersion(current: string, todayYYYYMMDD: string): string {
+  const prefix = `rc-${todayYYYYMMDD}-`;
+  let n = 1;
+  if (current.startsWith(prefix)) {
+    const k = Number.parseInt(current.slice(prefix.length), 10);
+    if (Number.isFinite(k) && k >= 1) n = k + 1;
+  }
+  return `${prefix}${n}`;
+}
 
 export function getComposite(id: RiskComposite["id"]): RiskComposite {
   const composite = RISK_MODEL.composites.find((c) => c.id === id);

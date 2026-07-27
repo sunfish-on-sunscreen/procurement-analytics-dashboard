@@ -62,6 +62,8 @@ export function ReportEditor({
   supplierCategory,
   supplierDirectory,
   generatedBy,
+  configVersion,
+  configFingerprint,
 }: {
   defaultPeriod: PeriodSelection;
   periods: PeriodOption[];
@@ -69,6 +71,8 @@ export function ReportEditor({
   supplierCategory: Record<string, string>;
   supplierDirectory: SupplierDirectory;
   generatedBy: string;
+  configVersion: string;
+  configFingerprint: string;
 }) {
   const router = useRouter();
   const yearById = useMemo(
@@ -276,6 +280,8 @@ export function ReportEditor({
     generatedAt: new Date().toISOString(),
     filename: `Report_${label.replace(/[^\w-]+/g, "_")}.pdf`,
     ephemeral: config.period.mode === "range",
+    configVersion,
+    configFingerprint,
   };
 
   return (

@@ -22,6 +22,7 @@ import { computeCycleBreakdown } from "@/lib/cycle-breakdown";
 import { loadTemporalMatrix } from "@/lib/temporal-load";
 import { assembleSupplierFocus } from "@/lib/report-focus";
 import type { ReportFocusData } from "@/lib/report-focus-types";
+import { readRiskModelStamp } from "@/lib/risk-model-server";
 import {
   ReportDocument,
   type ReportAnalyses,
@@ -55,6 +56,7 @@ export default async function ReportDetailPage({
     recommendations,
     sourcingCoverage,
     supplierCategory,
+    stamp,
   ] = await Promise.all([
     getAnalysisResult<SpendOverviewResult>(periodId, "spend_overview"),
     getAnalysisResult<AbcResult>(periodId, "abc"),
@@ -66,6 +68,9 @@ export default async function ReportDetailPage({
     // section is simply omitted, exactly like a missing cycle_time.
     getAnalysisResult<SourcingCoverageResult>(periodId, "sourcing_coverage"),
     getSupplierCategoryMap(),
+    // Live config stamp — read at request time so the footer reflects the config
+    // that produced THIS rendering (reports re-render from live analyses).
+    readRiskModelStamp(),
   ]);
 
   // Reports persisted before Batch 5 lack the `cycle_framing` marker. Render
@@ -132,6 +137,8 @@ export default async function ReportDetailPage({
         generatedBy: summary.generatedByUser.name,
         generatedAt: summary.createdAt.toISOString(),
         filename: `${summary.title.replace(/[^\w-]+/g, "_")}.pdf`,
+        configVersion: stamp.version,
+        configFingerprint: stamp.fingerprint,
       }}
       analyses={analyses}
       config={config}

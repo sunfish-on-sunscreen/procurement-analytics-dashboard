@@ -29,7 +29,6 @@ import {
 import type { ReportFocusData } from "@/lib/report-focus-types";
 import { buildClassificationAnomalies, buildAnomalyCrossref } from "@/lib/anomaly-crossref";
 import { deriveCycleFlags } from "@/lib/cycle-flags";
-import { RISK_MODEL_VERSION, RISK_MODEL_FINGERPRINT } from "@/lib/risk-model";
 import {
   renderCoverageAppendix,
   COVERAGE_METHOD_LABEL,
@@ -71,6 +70,10 @@ export type ReportMeta = {
   generatedAt: string; // ISO
   filename: string;
   ephemeral?: boolean;
+  // Risk-model config that produced this rendering — read at request time (server)
+  // so the printed footer stamp reflects the live config, not a build-time bundle.
+  configVersion: string;
+  configFingerprint: string;
 };
 
 const QUADRANT_ORDER: KraljicQuadrant[] = [
@@ -1328,8 +1331,8 @@ function ReportConfigStamp({ meta }: { meta: ReportMeta }) {
     <section className="mt-2 flex break-inside-avoid flex-col gap-1 border-t pt-3 text-xs text-muted-foreground">
       <p>
         Risk-model config{" "}
-        <span className="font-medium text-foreground">v{RISK_MODEL_VERSION}</span>{" "}
-        <span className="tabular-nums">({RISK_MODEL_FINGERPRINT})</span> &middot;
+        <span className="font-medium text-foreground">v{meta.configVersion}</span>{" "}
+        <span className="tabular-nums">({meta.configFingerprint})</span> &middot;
         generated {generatedFmt.format(new Date(meta.generatedAt))}
       </p>
       <p>
