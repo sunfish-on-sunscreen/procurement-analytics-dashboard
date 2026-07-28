@@ -7,13 +7,28 @@
       "version": "1.0.0",
       "definition": "SHARED step curve on the number of OTHER suppliers in the same category across the full roster (active or not); fewer alternatives -> higher risk. Values are the normalized 0-100 axis (the old 0-50 points doubled: 50->100, 35->70, 22->44, 12->24, 5->10; the x2 that used to live in scores.concentration_0_100 is folded in here, bit-identical). Referenced by BOTH supplyRisk.supply_concentration AND performanceRisk.roster_concentration -- ONE definition, TWO consumers; editing it moves both scores, and is why the two risk scores correlate r=-0.852 (documented on the Methodology page). `input`=count: keyed by the integer other-in-category count; anything not listed (>=5, true abundance) falls through to `default` 0.",
       "input": "count",
-      "default": 0.0,
+      "default": 0,
       "rows": [
-        { "key": 0, "value": 100.0 },
-        { "key": 1, "value": 70.0 },
-        { "key": 2, "value": 44.0 },
-        { "key": 3, "value": 24.0 },
-        { "key": 4, "value": 10.0 }
+        {
+          "key": 0,
+          "value": 100
+        },
+        {
+          "key": 1,
+          "value": 70
+        },
+        {
+          "key": 2,
+          "value": 44
+        },
+        {
+          "key": 3,
+          "value": 24
+        },
+        {
+          "key": 4,
+          "value": 10
+        }
       ]
     },
     "country_distance": {
@@ -21,11 +36,43 @@
       "version": "1.0.0",
       "definition": "Geographic supply-distance tier of the supplier's country (0 = domestic, 100 = far). Consumed by performanceRisk.country_distance. Deliberately SEPARATE from import_friction (geography, not trade blocs): India (IN) sits at 60 here (Asia-Pacific by geography) but at 100 on import_friction (outside RCEP since 2019) -- the divergence is intentional; do not unify. `input`=country: matched by ISO alpha-2 code (also full name for ID); any code in no row's `members` falls through to `default` 100.",
       "input": "country",
-      "default": 100.0,
+      "default": 100,
       "rows": [
-        { "key": "domestic", "value": 0.0, "members": ["ID", "INDONESIA"] },
-        { "key": "asean", "value": 30.0, "members": ["SG", "MY", "TH", "VN", "PH", "BN", "MM", "LA", "KH"] },
-        { "key": "asia_pacific", "value": 60.0, "members": ["CN", "JP", "KR", "AU", "NZ", "IN"] }
+        {
+          "key": "domestic",
+          "value": 0,
+          "members": [
+            "ID",
+            "INDONESIA"
+          ]
+        },
+        {
+          "key": "asean",
+          "value": 30,
+          "members": [
+            "SG",
+            "MY",
+            "TH",
+            "VN",
+            "PH",
+            "BN",
+            "MM",
+            "LA",
+            "KH"
+          ]
+        },
+        {
+          "key": "asia_pacific",
+          "value": 60,
+          "members": [
+            "CN",
+            "JP",
+            "KR",
+            "AU",
+            "NZ",
+            "IN"
+          ]
+        }
       ]
     },
     "import_friction": {
@@ -33,32 +80,222 @@
       "version": "1.0.0",
       "definition": "Indonesia trade-agreement coverage of the supplier's country (0 = domestic, 100 = no agreement). Consumed by supplyRisk.import_friction. Deliberately SEPARATE from country_distance (trade blocs, not geography): India is outside RCEP so lands at 100 here despite being Asia-Pacific (60) on distance. `input`=country: matched by ISO alpha-2 code (also IDN / full name for ID); any code in no row's `members` falls through to `default` 100.",
       "input": "country",
-      "default": 100.0,
+      "default": 100,
       "rows": [
-        { "key": "domestic", "value": 0.0, "members": ["ID", "IDN", "INDONESIA"] },
-        { "key": "afta", "value": 32.0, "members": ["MY", "SG", "TH", "VN", "PH", "BN", "MM", "LA", "KH"] },
-        { "key": "rcep_non_asean", "value": 64.0, "members": ["JP", "KR", "CN", "AU", "NZ"] }
+        {
+          "key": "domestic",
+          "value": 0,
+          "members": [
+            "ID",
+            "IDN",
+            "INDONESIA"
+          ]
+        },
+        {
+          "key": "afta",
+          "value": 32,
+          "members": [
+            "MY",
+            "SG",
+            "TH",
+            "VN",
+            "PH",
+            "BN",
+            "MM",
+            "LA",
+            "KH"
+          ]
+        },
+        {
+          "key": "rcep_non_asean",
+          "value": 64,
+          "members": [
+            "JP",
+            "KR",
+            "CN",
+            "AU",
+            "NZ"
+          ]
+        }
       ]
     }
   },
   "variables": {
-    "supply_concentration": { "label": "Supply concentration", "kind": "lookup", "table": "concentration_curve", "key": "roster_other_count", "eta2": { "category": 1.0, "country": 0.183 } },
-    "roster_concentration": { "label": "Roster concentration", "kind": "lookup", "table": "concentration_curve", "key": "roster_other_count", "feedsBuiltin": "risk_score", "eta2": { "category": 1.0, "country": 0.183 } },
-    "country_distance": { "label": "Country distance", "kind": "lookup", "table": "country_distance", "key": "country", "feedsBuiltin": "risk_score", "eta2": { "category": 0.578, "country": 1.0 } },
-    "import_friction": { "label": "Import friction", "kind": "lookup", "table": "import_friction", "key": "country", "eta2": { "category": 0.582, "country": 1.0 } },
-    "cost_premium": { "label": "Cost premium", "kind": "computed", "resolver": "cost_premium", "default": 0.0, "partition": { "key": "item", "benchmarkStat": "spend_weighted_mean", "minGroupMembers": 2, "minPosPerSupplierItem": 2, "belowMinimum": "excluded", "benchmarkMode": "internal" }, "eta2": { "category": 0.195, "country": 0.255 } },
-    "on_time_rate": { "label": "On-time delivery rate", "kind": "aggregate", "source": "on_time_delivery", "agg": "rate_pct", "default": 0.0, "feedsBuiltin": "delivery_score", "eta2": { "category": 0.063, "country": 0.126 } },
-    "lead_time": { "label": "Lead time (PO to delivery, days)", "kind": "aggregate", "source": "po_to_delivery_days", "agg": "mean", "default": 0.0, "feedsBuiltin": "delivery_score", "eta2": { "category": 0.841, "country": 0.492 } },
-    "three_way_match_rate": { "label": "Three-way-match pass rate", "kind": "aggregate", "source": "three_way_match_pass", "agg": "rate_pct", "default": 0.0, "feedsBuiltin": "process_score", "eta2": { "category": 0.265, "country": 0.255 } },
-    "defect_rate": { "label": "Defect rate", "kind": "aggregate", "source": "defect_count", "agg": "defect_ratio_pct", "default": 0.0, "feedsBuiltin": "quality_score", "eta2": { "category": 0.114, "country": 0.094 } },
-    "complaint_rate": { "label": "Complaint rate", "kind": "aggregate", "source": "complaint_count", "agg": "share_ge1_pct", "default": 0.0, "feedsBuiltin": "quality_score", "eta2": { "category": 0.219, "country": 0.130 } },
-    "cycle_time": { "label": "Total cycle time (PR to payment, days)", "kind": "aggregate", "source": "total_cycle_days", "agg": "mean", "default": 0.0, "eta2": { "category": 0.879, "country": 0.528 } },
-    "spend_share": { "label": "Spend share (% of portfolio)", "kind": "aggregate", "source": "total_value_usd", "agg": "spend_share_pct", "default": 0.0, "eta2": { "category": 0.752, "country": 0.241 } },
-    "payment_days_past_terms": { "label": "Payment days past terms", "kind": "locked", "locked": "Inert — a uniform random draw on {0..15}; nothing explains its variance (Methodology dead-metrics)." },
-    "payment_date": { "label": "Payment date", "kind": "locked", "locked": "Outside window scope — the reporting window anchors on order date (poDate), not payment date." },
-    "requisition_estimate": { "label": "Requisition estimate accuracy", "kind": "locked", "locked": "Generator artifact — the estimate is the order value jittered by Uniform(-0.10, +0.15), a copy of the outcome, not a forecast." },
-    "cycle_time_cv": { "label": "Cycle-time variability (CV)", "kind": "locked", "locked": "Measured dead — ~93% determined by category (eta-squared 0.94); re-reports buying method, not supplier conduct.", "eta2": { "category": 0.939, "country": 0.27 } },
-    "delivery_variability": { "label": "Delivery variability", "kind": "locked", "locked": "Measured — no forward signal; the on-time boolean is a coin flip at the global rate.", "eta2": { "category": 0.863, "country": 0.314 } }
+    "supply_concentration": {
+      "label": "Supply concentration",
+      "kind": "lookup",
+      "table": "concentration_curve",
+      "key": "roster_other_count",
+      "eta2": {
+        "category": 1,
+        "country": 0.183
+      }
+    },
+    "roster_concentration": {
+      "label": "Roster concentration",
+      "kind": "lookup",
+      "table": "concentration_curve",
+      "key": "roster_other_count",
+      "feedsBuiltin": "risk_score",
+      "eta2": {
+        "category": 1,
+        "country": 0.183
+      }
+    },
+    "country_distance": {
+      "label": "Country distance",
+      "kind": "lookup",
+      "table": "country_distance",
+      "key": "country",
+      "feedsBuiltin": "risk_score",
+      "eta2": {
+        "category": 0.578,
+        "country": 1
+      }
+    },
+    "import_friction": {
+      "label": "Import friction",
+      "kind": "lookup",
+      "table": "import_friction",
+      "key": "country",
+      "eta2": {
+        "category": 0.582,
+        "country": 1
+      }
+    },
+    "cost_premium": {
+      "label": "Cost premium",
+      "kind": "computed",
+      "resolver": "cost_premium",
+      "default": 0,
+      "partition": {
+        "key": "item",
+        "benchmarkStat": "spend_weighted_mean",
+        "minGroupMembers": 2,
+        "minPosPerSupplierItem": 2,
+        "belowMinimum": "excluded",
+        "benchmarkMode": "internal"
+      },
+      "eta2": {
+        "category": 0.195,
+        "country": 0.255
+      }
+    },
+    "on_time_rate": {
+      "label": "On-time delivery rate",
+      "kind": "aggregate",
+      "source": "on_time_delivery",
+      "agg": "rate_pct",
+      "default": 0,
+      "feedsBuiltin": "delivery_score",
+      "eta2": {
+        "category": 0.063,
+        "country": 0.126
+      }
+    },
+    "lead_time": {
+      "label": "Lead time (PO to delivery, days)",
+      "kind": "aggregate",
+      "source": "po_to_delivery_days",
+      "agg": "mean",
+      "default": 0,
+      "feedsBuiltin": "delivery_score",
+      "eta2": {
+        "category": 0.841,
+        "country": 0.492
+      }
+    },
+    "three_way_match_rate": {
+      "label": "Three-way-match pass rate",
+      "kind": "aggregate",
+      "source": "three_way_match_pass",
+      "agg": "rate_pct",
+      "default": 0,
+      "feedsBuiltin": "process_score",
+      "eta2": {
+        "category": 0.265,
+        "country": 0.255
+      }
+    },
+    "defect_rate": {
+      "label": "Defect rate",
+      "kind": "aggregate",
+      "source": "defect_count",
+      "agg": "defect_ratio_pct",
+      "default": 0,
+      "feedsBuiltin": "quality_score",
+      "eta2": {
+        "category": 0.114,
+        "country": 0.094
+      }
+    },
+    "complaint_rate": {
+      "label": "Complaint rate",
+      "kind": "aggregate",
+      "source": "complaint_count",
+      "agg": "share_ge1_pct",
+      "default": 0,
+      "feedsBuiltin": "quality_score",
+      "eta2": {
+        "category": 0.219,
+        "country": 0.13
+      }
+    },
+    "cycle_time": {
+      "label": "Total cycle time (PR to payment, days)",
+      "kind": "aggregate",
+      "source": "total_cycle_days",
+      "agg": "mean",
+      "default": 0,
+      "eta2": {
+        "category": 0.879,
+        "country": 0.528
+      }
+    },
+    "spend_share": {
+      "label": "Spend share (% of portfolio)",
+      "kind": "aggregate",
+      "source": "total_value_usd",
+      "agg": "spend_share_pct",
+      "default": 0,
+      "eta2": {
+        "category": 0.752,
+        "country": 0.241
+      }
+    },
+    "payment_days_past_terms": {
+      "label": "Payment days past terms",
+      "kind": "locked",
+      "locked": "Inert — a uniform random draw on {0..15}; nothing explains its variance (Methodology dead-metrics)."
+    },
+    "payment_date": {
+      "label": "Payment date",
+      "kind": "locked",
+      "locked": "Outside window scope — the reporting window anchors on order date (poDate), not payment date."
+    },
+    "requisition_estimate": {
+      "label": "Requisition estimate accuracy",
+      "kind": "locked",
+      "locked": "Generator artifact — the estimate is the order value jittered by Uniform(-0.10, +0.15), a copy of the outcome, not a forecast."
+    },
+    "cycle_time_cv": {
+      "label": "Cycle-time variability (CV)",
+      "kind": "locked",
+      "locked": "Measured dead — ~93% determined by category (eta-squared 0.94); re-reports buying method, not supplier conduct.",
+      "eta2": {
+        "category": 0.939,
+        "country": 0.27
+      }
+    },
+    "delivery_variability": {
+      "label": "Delivery variability",
+      "kind": "locked",
+      "locked": "Measured — no forward signal; the on-time boolean is a coin flip at the global rate.",
+      "eta2": {
+        "category": 0.863,
+        "country": 0.314
+      }
+    }
   },
   "composites": [
     {
@@ -76,7 +313,7 @@
           "provenance": "computed",
           "builtin": true,
           "enabled": true,
-          "weight": 0.30
+          "weight": 0.3
         },
         {
           "id": "delivery_score",
@@ -85,7 +322,7 @@
           "provenance": "computed",
           "builtin": true,
           "enabled": true,
-          "weight": 0.30
+          "weight": 0.3
         },
         {
           "id": "process_score",
@@ -122,9 +359,12 @@
           "definition": "Geographic supply-distance tier of the supplier's country. 0-100 lookup {Indonesia:0, ASEAN:30, Asia-Pacific:60, other:100}.",
           "provenance": "lookup",
           "formula": "country_distance",
-          "bounds": { "lo": 0, "hi": 100 },
+          "bounds": {
+            "lo": 0,
+            "hi": 100
+          },
           "enabled": true,
-          "weight": 0.60
+          "weight": 0.6
         },
         {
           "id": "roster_concentration",
@@ -132,9 +372,12 @@
           "definition": "Roster-based supply concentration (the SAME curve as supplyRisk.supply_concentration), on the 0-100 axis {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
           "provenance": "lookup",
           "formula": "roster_concentration",
-          "bounds": { "lo": 0, "hi": 100 },
+          "bounds": {
+            "lo": 0,
+            "hi": 100
+          },
           "enabled": true,
-          "weight": 0.40
+          "weight": 0.4
         }
       ]
     },
@@ -152,9 +395,12 @@
           "definition": "Step curve on the number of OTHER suppliers in the same category across the full roster (active or not); fewer alternatives -> higher risk. Normalized curve {0:100,1:70,2:44,3:24,4:10,>=5:0}.",
           "provenance": "lookup",
           "formula": "supply_concentration",
-          "bounds": { "lo": 0, "hi": 100 },
+          "bounds": {
+            "lo": 0,
+            "hi": 100
+          },
           "enabled": true,
-          "weight": 0.50
+          "weight": 0.5
         },
         {
           "id": "cost_premium",
@@ -162,7 +408,10 @@
           "definition": "Spend-weighted item-price premium vs the cross-supplier benchmark, over supplier x item pairs with >=2 POs where the item has >=2 suppliers. Normalized clip(premium*250, 0, 100); at/below market -> 0.",
           "provenance": "computed",
           "formula": "cost_premium",
-          "bounds": { "lo": 0, "hi": 100 },
+          "bounds": {
+            "lo": 0,
+            "hi": 100
+          },
           "enabled": true,
           "weight": 0.25
         },
@@ -172,7 +421,10 @@
           "definition": "Indonesia trade-agreement coverage of the supplier's country. Normalized {domestic:0, AFTA:32, RCEP-non-ASEAN:64, other:100}.",
           "provenance": "lookup",
           "formula": "import_friction",
-          "bounds": { "lo": 0, "hi": 100 },
+          "bounds": {
+            "lo": 0,
+            "hi": 100
+          },
           "enabled": true,
           "weight": 0.25
         }
