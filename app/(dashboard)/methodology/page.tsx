@@ -300,6 +300,34 @@ export default async function MethodologyPage() {
               from the stored records by <code>python/scores.py</code>, deterministically
               — the same records produce the same scores on every run.
             </p>
+            <p>
+              <strong className="text-foreground">What is configurable, and what is not.</strong>{" "}
+              The scoring model exposes real knobs — component weights, each component&apos;s
+              enable/disable, the lookup-table values, the risk components&apos; formulas, their
+              normalization bounds, and the cost-premium partition parameters are all editable in
+              the settings panel and take effect through the recompute. The variable{" "}
+              <em>catalogue</em> is deliberately NOT: adding a variable requires code, because a
+              picker that offered an unvetted field would legitimise using it. So a screen that
+              looks fully open is bounded — you recombine the curated inputs, you do not invent one.
+            </p>
+            <p>
+              <strong className="text-foreground">One evaluator, by design.</strong> Formulas are
+              evaluated by a single whitelisted Python evaluator; the editor&apos;s live preview
+              calls that same evaluator through the API rather than re-implementing it. A second
+              TypeScript evaluator would disagree with Python on rounding (banker&apos;s rounding
+              versus JavaScript half-up), so the preview would quietly misrepresent what a saved
+              report will show. This is a correctness constraint, not an implementation detail.
+            </p>
+            <p>
+              <strong className="text-foreground">Fingerprint scope has a history.</strong> The
+              whole-config fingerprint covers the compute-affecting fields only, and what counts as
+              compute-affecting has widened as more became editable: schema 2.1.0 brought in
+              lookup-table values, 2.2.0 formulas, bounds and referenced-variable specs, 2.3.0 the
+              aggregate variables&apos; source and aggregation, and 2.4.0 the cost-premium partition
+              parameters. A fingerprint is comparable only within one schema version — the version
+              records what the fingerprint <em>covers</em> — which is why the report footer carries
+              both. An older printout stays interpretable, not merely mismatched.
+            </p>
           </section>
         </CardContent>
       </Card>
@@ -321,11 +349,17 @@ export default async function MethodologyPage() {
           <section id="normalization" className="space-y-2">
             <H3 id="normalization" />
             <p>
-              Every sub-score is normalized to 0–100 against{" "}
-              <strong>fixed industry bounds</strong>, not the population min/max, so a
-              supplier is measured against absolute standards — not against whoever else
-              happens to be in the dataset — and a score does not move just because the
-              rest of the roster did.
+              Every sub-score is guaranteed to land in 0–100{" "}
+              <strong>by construction</strong>, via per-component normalization bounds — the
+              [lo, hi] window a raw value maps onto 0–100. Those bounds are an{" "}
+              <strong>organisational calibration</strong> (configurable in the settings
+              panel), not an industry standard, and not the population min/max, so a score
+              does not move just because the rest of the roster did. It is the same division
+              of labour the composite makes with its{" "}
+              <Ref to="weight-config">weights</Ref>: CIPS names the dimensions and instructs
+              the organisation to assign the weighting itself, and prescribes no bounds
+              either — the ceilings here are ours to set, defensibly, not a published
+              standard.
             </p>
             <p className="rounded-md bg-muted/50 p-2 text-xs">
               <code>
@@ -334,8 +368,8 @@ export default async function MethodologyPage() {
               </code>
             </p>
             <p className="text-xs">
-              Bounds reflect procurement conventions: near-zero-defect quality and a
-              60-day lead-time ceiling; percentages are 0–100 by definition. Clamping
+              The shipped bounds reflect procurement conventions: near-zero-defect quality
+              and a 60-day lead-time ceiling; percentages are 0–100 by definition. Clamping
               means values outside a bound score 0 or 100, never negative or &gt;100.
             </p>
             <p>
@@ -346,8 +380,8 @@ export default async function MethodologyPage() {
               half only occupies 66.7–100 — the defect half does roughly 2.3× the work
               inside Quality. Lead time is scored 0–60 days but real leads run 8–26.5
               days, so that half only occupies 55.8–86.7 — on-time delivery carries most
-              of Delivery. The bounds are honest industry ceilings; they simply leave
-              headroom this dataset never reaches.
+              of Delivery. The shipped bounds simply leave headroom this dataset never
+              reaches.
             </p>
           </section>
 
@@ -456,6 +490,18 @@ export default async function MethodologyPage() {
               could). The printed report is therefore the only durable record of which
               configuration produced a given result — there is no role system and nothing
               else logs who changed a weight or when.
+            </p>
+            <p>
+              <strong className="text-foreground">
+                The one sanctioned snapshot: weight-sensitivity.
+              </strong>{" "}
+              Recompute-on-read admits exactly one exception. The drop-one{" "}
+              <Ref to="sensitivity">weight-sensitivity analysis</Ref> costs about a minute and runs
+              N+1 full recomputes — too slow to redo per request — so it is persisted: recomputed
+              when a configuration is saved and STAMPED with the config fingerprint that produced
+              it. If the live fingerprint later differs, the tables are marked stale rather than
+              shown as current, so a snapshot can never silently misdescribe a configuration it was
+              not computed under.
             </p>
           </section>
 
@@ -656,7 +702,7 @@ export default async function MethodologyPage() {
             built from four sub-scores that are <strong>derived in code from raw
             operational data</strong> (deliveries, three-way-match results, and per-PO
             quality records — defect and complaint counts). Every sub-score is normalized
-            to 0–100 against fixed industry bounds (
+            to 0–100 against configurable calibration bounds (
             <Ref to="normalization">fixed-bound normalization</Ref>). The source data
             contains <strong>operational measurements only</strong>; all scorecard values
             are computed in code (<code>python/scores.py</code>) at import, so every stored
@@ -1983,25 +2029,27 @@ export default async function MethodologyPage() {
             </p>
             <ul className="list-disc space-y-1.5 pl-5">
               <li>
-                <strong>Two country tiers never fire.</strong> The composite&apos;s{" "}
-                <code>country_distance</code> has an ASEAN tier (30) and{" "}
-                <code>import_friction</code> an ASEAN tier (8), both meant for
-                regional-but-foreign origins. This roster has none — every supplier
-                is Indonesian or far-international — so those tiers never engage.
-                Because <code>country_distance</code>{" "}
-                drives 60% of the structural Risk sub-score, on this data that
-                sub-score is effectively
+                <strong>Four lookup rows never fire — two country tiers.</strong> The
+                composite&apos;s <code>country_distance</code> has an ASEAN tier (30) and{" "}
+                <code>import_friction</code> an AFTA tier (32), both meant for
+                regional-but-foreign origins. This roster has none — every supplier is
+                Indonesian or far-international (Japan, Australia, and the West) — so those
+                two rows never engage. Because <code>country_distance</code> drives 60% of
+                the structural Risk sub-score, on this data that sub-score is effectively
                 &ldquo;Indonesia vs the rest of the world&rdquo;.
               </li>
               <li>
-                <strong>Two concentration rungs are unreachable.</strong> Both
-                supply-concentration curves reserve their top rung for a true
-                single-source category (one supplier, no alternatives). On this
-                roster the smallest category has two suppliers, so that rung never
-                fires — the advertised ceilings (50 on the Kraljic axis, 100 on the
-                composite) cannot be reached. The real maxima on this data are{" "}
-                <strong>35 and 70</strong>. (A finding from the current roster; it
-                would change if a sole-source category appeared.)
+                <strong>… and two rows of the shared concentration table.</strong> There is
+                now ONE <code>concentration_curve</code> table with two consumers —{" "}
+                <code>supplyRisk.supply_concentration</code> and{" "}
+                <code>performanceRisk.roster_concentration</code> — keyed by the number of
+                OTHER suppliers in a category. Across the 14 categories that count is 1, 2,
+                4, 6 or 7, so the <strong>0-other</strong> row (a true single-source
+                category, value 100) and the <strong>3-other</strong> row (value 24) never
+                fire: the reachable rung values are 70, 44, 10 and 0. Editing the
+                single-source rung changes no score on this data — it would if a sole-source
+                category appeared. (Because the table is shared, both consumers inherit the
+                same unreachable rows.)
               </li>
               <li>
                 <strong>
@@ -2083,9 +2131,15 @@ export default async function MethodologyPage() {
                 <strong>Cost premium measures overpricing, not cheapness.</strong> It
                 penalises measured overpricing only — below-market, at-market, and
                 un-benchmarked suppliers all score 0, so it never rewards a cheap
-                supplier. And the benchmark is <em>our own</em> spend-weighted average
-                price per item, not an external market rate: it catches a supplier out
-                of line with our roster, not with the world.
+                supplier. By default the benchmark is <em>our own</em> spend-weighted
+                average price per item, so it catches a supplier out of line with our
+                roster, not with the world. An <strong>external</strong> (or hybrid)
+                benchmark mode closes that gap: uploading a per-item market reference list
+                makes cost premium measure a supplier against the market rather than merely
+                against our own average. The reference prices are DATA, not config, so they
+                do not enter the fingerprint — under external or hybrid mode the fingerprint
+                pins the <em>mode</em> but not the uploaded price list, so a printed report
+                is reproducible only if that list is also unchanged.
               </li>
               <li>
                 <strong>Two sub-score halves are throttled by their bounds.</strong>{" "}
@@ -2093,9 +2147,9 @@ export default async function MethodologyPage() {
                 that half only occupies 66.7–100 — the defect half does roughly 2.3×
                 the work inside Quality. Lead time is scored 0–60 days but real leads
                 run 8–26.5 days, so that half only occupies 55.8–86.7 — on-time
-                delivery carries most of Delivery. The bounds are honest industry
-                ceilings; they simply leave headroom this dataset never reaches. (Also
-                stated under <Ref to="normalization">fixed-bound normalization</Ref>.)
+                delivery carries most of Delivery. The shipped bounds simply leave
+                headroom this dataset never reaches. (Also stated under{" "}
+                <Ref to="normalization">fixed-bound normalization</Ref>.)
               </li>
             </ul>
           </section>
@@ -2157,6 +2211,24 @@ export default async function MethodologyPage() {
             tested and rejected. The recurring inference shape behind the requisition and
             delivery-CV entries — a significant number that is still meaningless — is set
             out under <Ref to="hazards">artifact significance</Ref>.
+          </p>
+          <p>
+            <strong className="text-foreground">How this shows up in the formula editor.</strong>{" "}
+            The curated variable catalogue the formula editor offers reflects these findings
+            directly. The dead fields here — payment days-past-terms, the requisition estimate,
+            cycle-time variability, delivery variability, and payment date (outside the order-year
+            window) — appear in the variable picker <strong>locked</strong>, with the reason
+            visible, not hidden: showing why a field is unusable teaches the hazard, where hiding it
+            would invite someone to rebuild it by hand. Separately, a field that is an INPUT to a
+            builtin sub-score — on-time rate and lead time (Delivery), three-way-match rate
+            (Process), defect and complaint rate (Quality) — is <strong>blocked</strong> in the
+            performance-risk composite: because that composite feeds the performance score through
+            its Risk sub-score, placing such a field there would enter the composite twice, at two
+            different weights, multiplying rather than adding. The block is structural — the save is
+            rejected — and derived from the dependency graph, not a warning to be clicked past. The
+            same field is allowed on the standalone Kraljic supply-risk axis, which never feeds the
+            performance score, with a note that a behavioural field there is a departure from the
+            framework.
           </p>
           <ul className="list-disc space-y-2 pl-5">
             <li>
