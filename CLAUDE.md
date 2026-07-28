@@ -650,7 +650,11 @@ PO, every processScore, all AnalysisResult payloads and zones before shipping.
 control exposure · SupplierMetric 151 rows · processScore min 0 / max 100 / avg 87.67.
 
 **Restore recipe:** `npx prisma db seed`, then
-`cd python && .venv/Scripts/python seed_compute.py`.
+`cd python && .venv/Scripts/python seed_compute.py`, then (from the repo root)
+`npx tsx scripts/seed_sensitivity.ts`. The third step seeds the weight-sensitivity
+snapshot (SensitivityResult singleton, stamped with the config fingerprint) so §3.5
+lands FRESH after a restore instead of "not yet computed" — without it a restore reads
+as a broken feature. It runs the same sanctioned path a save's phase 2 uses (~60s).
 
 **Removed 2026-07-20 as dead:** `ImportForm`, `AddPurchaseCard`, `RemoveSupplierCard`,
 `RemovePurchaseCard`, `PurchaseRosterTable`, `lib/purchase-import.ts`,

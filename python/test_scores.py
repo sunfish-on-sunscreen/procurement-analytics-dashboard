@@ -146,6 +146,60 @@ def test_lookup_table_validation():
         assert "default" in str(e)
 
 
+def test_sensitivity_shape_and_gate():
+    """python/sensitivity.py is LOAD-BEARING — the save path (phase 2) invokes it. Lock its
+    output SHAPE and the published DEFAULT-config figures BY NAME, so a refactor that silently
+    changes what it emits fails here instead of quietly re-publishing different numbers on the
+    Methodology page. Skips gracefully when no DB / scipy is reachable (the pure tests above
+    need neither); the assertions require the config to be at its shipped defaults."""
+    try:
+        import psycopg2
+        import compute_analyses as ca
+        import sensitivity
+        sensitivity._ensure_database_url()
+        ca.load_env()
+        conn = psycopg2.connect(ca.get_dsn())
+    except Exception as e:  # noqa: BLE001 — no DB/scipy here: skip, don't fail the suite
+        print(f"[skip] test_sensitivity_shape_and_gate: unavailable ({type(e).__name__})")
+        return
+
+    try:
+        conn.set_session(readonly=True)
+        data = sensitivity.compute_sensitivity(conn)
+    finally:
+        conn.close()
+
+    # --- output shape ---
+    assert data["schema"] == 1, data.get("schema")
+    by_label = {w["label"]: w for w in data["windows"]}
+    assert set(by_label) == {"2024", "2025", "2026", "RANGE"}, sorted(by_label)
+    for w in data["windows"]:
+        assert {d["dropped"] for d in w["composite"]} == {
+            "quality_score", "delivery_score", "process_score", "risk_score"}
+        assert {d["dropped"] for d in w["supplyRisk"]} == {
+            "supply_concentration", "cost_premium", "import_friction"}
+        assert {d["dropped"] for d in w["performanceRisk"]} == {
+            "country_distance", "roster_concentration"}
+        for group in ("composite", "supplyRisk", "performanceRisk"):
+            for d in w[group]:
+                assert "rho" in d and "n" in d, (group, d)
+
+    # --- named-dimension gate at DEFAULT config (RANGE), asserted BY NAME, never positionally ---
+    rng = by_label["RANGE"]
+    comp_rho = {d["dropped"]: round(d["rho"], 2) for d in rng["composite"]}
+    assert comp_rho == {
+        "quality_score": 0.97, "delivery_score": 0.86,
+        "process_score": 0.94, "risk_score": 0.72}, comp_rho
+    comp_zone = {d["dropped"]: round(d["zone_pct"], 1) for d in rng["composite"]}
+    assert comp_zone == {
+        "quality_score": 3.6, "delivery_score": 10.9,
+        "process_score": 7.3, "risk_score": 36.4}, comp_zone
+    sr_rho = {d["dropped"]: round(d["rho"], 2) for d in rng["supplyRisk"]}
+    assert sr_rho == {
+        "supply_concentration": 0.84, "cost_premium": 0.92,
+        "import_friction": 0.81}, sr_rho
+
+
 def test_risk_config_renorm_on_disable():
     # Disabling a component redistributes its weight PROPORTIONALLY across the
     # survivors so the effective weights still sum to 1.0. supplyRisk defaults are
