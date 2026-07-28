@@ -11,7 +11,11 @@ import { cardElevation } from "@/lib/utils";
 import { SHOW_METHODOLOGY } from "@/lib/feature-flags";
 import { readRiskModel } from "@/lib/risk-model-server";
 import { getLookupCoverageInputs } from "@/lib/risk-model-coverage";
+import { readSensitivity } from "@/lib/sensitivity-server";
+import { sensitivityView } from "@/lib/sensitivity";
+import { configFingerprint } from "@/lib/risk-model";
 import { RiskModelSettings } from "@/components/Methodology/RiskModelSettings";
+import { SensitivityTables } from "@/components/Methodology/SensitivityTables";
 
 // ONE source of truth for section identity: number (shown in the heading and in a
 // print-only suffix on every in-prose reference), title, and anchor id. In-prose
@@ -135,10 +139,15 @@ export default async function MethodologyPage() {
   if (!SHOW_METHODOLOGY) notFound();
 
   await requireAuth();
-  const [riskModel, coverageInputs] = await Promise.all([
+  const [riskModel, coverageInputs, storedSensitivity] = await Promise.all([
     readRiskModel(),
     getLookupCoverageInputs(),
+    readSensitivity(),
   ]);
+  const sensitivity = sensitivityView(
+    storedSensitivity,
+    configFingerprint(riskModel.composites, riskModel.lookupTables),
+  );
 
   return (
     <div className="flex max-w-4xl flex-col gap-6">
@@ -847,88 +856,25 @@ export default async function MethodologyPage() {
             </p>
             <p>
               <strong className="text-foreground">Ranking is robust.</strong>{" "}
-              Spearman-correlating the drop-one supplier ranking against the original, no
-              single weight reorders the portfolio materially: on the all-years composite
-              (55 suppliers, the default view) dropping Quality leaves it almost unchanged
-              (ρ = 0.97), Process 0.94, Delivery 0.86, and Risk moves it most (ρ = 0.72).{" "}
-              <strong>
-                Every drop-one shown here — the four composite dimensions and the three
-                supply-risk components, in every window — stays at or above 0.72.
-              </strong>{" "}
-              The performance-risk sub-score&apos;s own two internals are the one
-              exception, treated in <Ref to="risk-score">the Risk sub-score</Ref>:
-              dropping <code>country_distance</code> takes that ranking down to ρ =
-              0.56–0.61.{" "}
-              (Quality is least influential at every grain; per{" "}
-              <Ref to="hazards">the grain-dependence hazard</Ref> the figures are
-              grain-dependent. This is a different test from the delivery-score
-              half-weighting drop-one in the{" "}
-              <Ref to="dead-metrics">dead-metrics catalogue</Ref>, ρ = +0.727 / +0.794,
-              which probes the two inputs <em>inside</em> one sub-score.)
+              Spearman-correlating each drop-one supplier ranking against the original, no
+              single weight reorders the portfolio materially — the correlations are in the
+              first table below. The performance-risk sub-score&apos;s own two internals are
+              the one exception, treated in <Ref to="risk-score">the Risk sub-score</Ref>.
+              (Per <Ref to="hazards">the grain-dependence hazard</Ref> these figures are
+              grain-dependent, so each window is shown separately. This is a different test
+              from the delivery-score half-weighting drop-one in the{" "}
+              <Ref to="dead-metrics">dead-metrics catalogue</Ref>, ρ = +0.727 / +0.794, which
+              probes the two inputs <em>inside</em> one sub-score.)
             </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b text-foreground">
-                    <th rowSpan={2} className="py-1.5 pr-3 text-left align-bottom font-medium">Window</th>
-                    <th colSpan={4} className="py-1.5 pr-3 text-center font-medium">Composite — drop dimension (ρ)</th>
-                    <th colSpan={3} className="py-1.5 text-center font-medium">Supply risk — drop component (ρ)</th>
-                  </tr>
-                  <tr className="border-b text-foreground">
-                    <th className="py-1.5 pr-3 text-right font-medium">Quality</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Delivery</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Process</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Risk</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Concentration</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Cost premium</th>
-                    <th className="py-1.5 text-right font-medium">Import friction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b"><td className="py-1.5 pr-3">2024</td><td className="py-1.5 pr-3 text-right tabular-nums">0.98</td><td className="py-1.5 pr-3 text-right tabular-nums">0.82</td><td className="py-1.5 pr-3 text-right tabular-nums">0.87</td><td className="py-1.5 pr-3 text-right tabular-nums">0.77</td><td className="py-1.5 pr-3 text-right tabular-nums">0.80</td><td className="py-1.5 pr-3 text-right tabular-nums">0.93</td><td className="py-1.5 text-right tabular-nums">0.80</td></tr>
-                  <tr className="border-b"><td className="py-1.5 pr-3">2025</td><td className="py-1.5 pr-3 text-right tabular-nums">0.95</td><td className="py-1.5 pr-3 text-right tabular-nums">0.82</td><td className="py-1.5 pr-3 text-right tabular-nums">0.92</td><td className="py-1.5 pr-3 text-right tabular-nums">0.73</td><td className="py-1.5 pr-3 text-right tabular-nums">0.82</td><td className="py-1.5 pr-3 text-right tabular-nums">0.93</td><td className="py-1.5 text-right tabular-nums">0.80</td></tr>
-                  <tr className="border-b"><td className="py-1.5 pr-3">2026</td><td className="py-1.5 pr-3 text-right tabular-nums">0.98</td><td className="py-1.5 pr-3 text-right tabular-nums">0.83</td><td className="py-1.5 pr-3 text-right tabular-nums">0.94</td><td className="py-1.5 pr-3 text-right tabular-nums">0.84</td><td className="py-1.5 pr-3 text-right tabular-nums">0.86</td><td className="py-1.5 pr-3 text-right tabular-nums">0.91</td><td className="py-1.5 text-right tabular-nums">0.80</td></tr>
-                  <tr><td className="py-1.5 pr-3 font-medium text-foreground">All years</td><td className="py-1.5 pr-3 text-right tabular-nums">0.97</td><td className="py-1.5 pr-3 text-right tabular-nums">0.86</td><td className="py-1.5 pr-3 text-right tabular-nums">0.94</td><td className="py-1.5 pr-3 text-right font-medium tabular-nums text-foreground">0.72</td><td className="py-1.5 pr-3 text-right tabular-nums">0.84</td><td className="py-1.5 pr-3 text-right tabular-nums">0.92</td><td className="py-1.5 text-right tabular-nums">0.81</td></tr>
-                </tbody>
-              </table>
-            </div>
             <p>
               <strong className="text-foreground">Classification is not robust.</strong>{" "}
               The same perturbation moves a large share of suppliers across a decision
-              boundary. Dropping Risk from the composite flips{" "}
-              <strong>36.4% of performance zones</strong> on the all-years view; dropping
-              a single supply-risk component moves <strong>6–28% of Kraljic quadrants</strong>,
-              depending on the window and the component. Why the two disagree — a small
-              score shift flips a label near a median line while barely moving the overall
-              ordering — is the median-split churn hazard (
+              boundary — the second table gives the per-window figures. Why the ranking and
+              the labels disagree — a small score shift flips a label near a median line while
+              barely moving the overall ordering — is the median-split churn hazard (
               <Ref to="hazards">cross-cutting inference hazards</Ref>).
             </p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b text-foreground">
-                    <th rowSpan={2} className="py-1.5 pr-3 text-left align-bottom font-medium">Window</th>
-                    <th colSpan={4} className="py-1.5 pr-3 text-center font-medium">Composite — % zone change</th>
-                    <th colSpan={3} className="py-1.5 text-center font-medium">Supply risk — % Kraljic quadrant change</th>
-                  </tr>
-                  <tr className="border-b text-foreground">
-                    <th className="py-1.5 pr-3 text-right font-medium">Quality</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Delivery</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Process</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Risk</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Concentration</th>
-                    <th className="py-1.5 pr-3 text-right font-medium">Cost premium</th>
-                    <th className="py-1.5 text-right font-medium">Import friction</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b"><td className="py-1.5 pr-3">2024</td><td className="py-1.5 pr-3 text-right tabular-nums">0.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">16.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">12.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">28.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">28.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">16.0%</td><td className="py-1.5 text-right tabular-nums">18.0%</td></tr>
-                  <tr className="border-b"><td className="py-1.5 pr-3">2025</td><td className="py-1.5 pr-3 text-right tabular-nums">3.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">3.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">3.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">31.4%</td><td className="py-1.5 pr-3 text-right tabular-nums">19.6%</td><td className="py-1.5 pr-3 text-right tabular-nums">21.6%</td><td className="py-1.5 text-right tabular-nums">21.6%</td></tr>
-                  <tr className="border-b"><td className="py-1.5 pr-3">2026</td><td className="py-1.5 pr-3 text-right tabular-nums">4.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">8.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">8.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">28.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">6.0%</td><td className="py-1.5 pr-3 text-right tabular-nums">26.0%</td><td className="py-1.5 text-right tabular-nums">26.0%</td></tr>
-                  <tr><td className="py-1.5 pr-3 font-medium text-foreground">All years</td><td className="py-1.5 pr-3 text-right tabular-nums">3.6%</td><td className="py-1.5 pr-3 text-right tabular-nums">10.9%</td><td className="py-1.5 pr-3 text-right tabular-nums">7.3%</td><td className="py-1.5 pr-3 text-right font-medium tabular-nums text-foreground">36.4%</td><td className="py-1.5 pr-3 text-right tabular-nums">18.2%</td><td className="py-1.5 pr-3 text-right tabular-nums">14.5%</td><td className="py-1.5 text-right tabular-nums">18.2%</td></tr>
-                </tbody>
-              </table>
-            </div>
+            <SensitivityTables view={sensitivity} />
             <p>
               <strong className="text-foreground">How to read this.</strong> The{" "}
               <em>ranking</em> is safe to use for prioritisation — it holds under any of

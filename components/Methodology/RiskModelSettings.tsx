@@ -1,8 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight } from "lucide-react";
+
+import { setSensitivityRecomputing } from "@/lib/sensitivity-status";
 
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -121,6 +124,40 @@ export function RiskModelSettings({
   const [confirmingResetId, setConfirmingResetId] = useState<string | null>(null);
   const [errorById, setErrorById] = useState<Record<string, string | null>>({});
 
+  const router = useRouter();
+  // Phase 2 of the two-phase save: after ANY successful config save, auto-run the sensitivity
+  // analysis (~60s) and drive the shared "recomputing" flag the §3.5 tables read. Serialized
+  // via refs (never awaited from a save, so the Save button returns immediately): a save during
+  // a run sets `pending`, and the loop re-runs once more against the newest config so the final
+  // stamp matches. router.refresh() re-renders §3.5 from the fresh snapshot (or, on failure,
+  // as stale — the config changed but the snapshot did not).
+  const sensRunning = useRef(false);
+  const sensPending = useRef(false);
+  async function triggerSensitivity() {
+    if (sensRunning.current) {
+      sensPending.current = true;
+      return;
+    }
+    sensRunning.current = true;
+    setSensitivityRecomputing(true);
+    try {
+      do {
+        sensPending.current = false;
+        const res = await fetch("/api/risk-model/sensitivity", { method: "POST" });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => ({}))) as { error?: string };
+          toast.error(data.error ?? "Sensitivity recompute failed.");
+        }
+      } while (sensPending.current);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Sensitivity recompute failed.");
+    } finally {
+      sensRunning.current = false;
+      setSensitivityRecomputing(false);
+      router.refresh();
+    }
+  }
+
   const parsed = draft.map(parse);
   const statuses = parsed.map(statusOf);
   const configFp = configFingerprint(active.composites, active.lookupTables);
@@ -218,6 +255,7 @@ export function RiskModelSettings({
       }));
       setDraft((prev) => prev.map((d) => (d.id === composite.id ? toDraftComposite(saved) : d)));
       toast.success(`Saved ${composite.label} (v${newVersion}). All periods recomputed.`);
+      void triggerSensitivity();
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Network error.";
       setErrorById((err) => ({ ...err, [composite.id]: msg }));
@@ -293,6 +331,7 @@ export function RiskModelSettings({
         };
       });
       toast.success(`Saved ${label}. All periods recomputed.`);
+      void triggerSensitivity();
       return null;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Network error.";
