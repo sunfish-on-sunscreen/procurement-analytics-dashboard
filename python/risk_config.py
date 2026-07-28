@@ -119,8 +119,9 @@ def validate_variables(model):
       - supply_concentration + roster_concentration must reference the SAME (table, key) — one
         signal under two ids (the documented r=-0.852 correlation follows from it), so a silent
         split is disallowed;
-      - every component `formula` references only known variables, and a component's
-        `lookupTable` (kept from Stage A/B) matches its formula's lookup-variable table."""
+      - every component `formula` references only known variables. (The per-component
+        `lookupTable` field was DROPPED in Prerequisite P; table references are now derived from
+        formula -> variables -> table, so there is no lookupTable/formula cross-check here.)"""
     variables = model.get("variables", {})
     tables = model.get("lookupTables", {})
     for vid, var in variables.items():
@@ -156,14 +157,6 @@ def validate_variables(model):
                     raise ValueError(
                         f"risk-model composite '{composite['id']}' component '{comp['id']}': "
                         f"formula references unknown variable {ref!r}"
-                    )
-            lookup_table_ref = comp.get("lookupTable")
-            if lookup_table_ref:
-                used = {variables[r]["table"] for r in refs if variables[r].get("kind") == "lookup"}
-                if used != {lookup_table_ref}:
-                    raise ValueError(
-                        f"risk-model composite '{composite['id']}' component '{comp['id']}': "
-                        f"lookupTable {lookup_table_ref!r} must match its formula lookup table(s) {used}"
                     )
 
 

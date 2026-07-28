@@ -146,7 +146,7 @@ export default async function MethodologyPage() {
   ]);
   const sensitivity = sensitivityView(
     storedSensitivity,
-    configFingerprint(riskModel.composites, riskModel.lookupTables),
+    configFingerprint(riskModel.composites, riskModel.lookupTables, riskModel.variables ?? {}),
   );
 
   return (

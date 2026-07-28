@@ -39,7 +39,7 @@ export type RunSensitivityResult =
  */
 export async function runAndPersistSensitivity(): Promise<RunSensitivityResult> {
   const model = await readRiskModel();
-  const fingerprint = configFingerprint(model.composites, model.lookupTables);
+  const fingerprint = configFingerprint(model.composites, model.lookupTables, model.variables ?? {});
   const { code, data, stderr } = await runSensitivity();
   if (code !== 0 || !data) {
     const detail = stderr.trim().slice(-800) || `exit code ${code}`;

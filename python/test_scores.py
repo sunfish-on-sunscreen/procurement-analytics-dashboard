@@ -203,12 +203,8 @@ def test_variable_validation():
             if c["id"] == "supplyRisk":
                 c["components"][0]["formula"] = "nonexistent_var"
     rejects(break_ref, "unknown variable")
-    # a component's lookupTable must match its formula's lookup-variable table
-    def break_lt(m):
-        for c in m["composites"]:
-            if c["id"] == "supplyRisk":
-                c["components"][0]["lookupTable"] = "import_friction"
-    rejects(break_lt, "lookupTable")
+    # (Prerequisite P dropped component.lookupTable; table references now derive from
+    # formula -> variables -> table, so there is no lookupTable/formula check to exercise.)
 
 
 def test_lookup_table_validation():

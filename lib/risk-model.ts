@@ -15,14 +15,19 @@
  *    the SAME schemaVersion, because the version records what the fingerprint COVERS.
  *    schema 2.1.0 (Stage A, commit fa7d75f) EXPANDED that scope to include lookup-table
  *    values, so a 2.0.0 fingerprint and a 2.1.0 fingerprint differ at IDENTICAL weights
- *    (RISK_MODEL_FINGERPRINT moved to e4db2d7e) without any score changing. Bump
+ *    (RISK_MODEL_FINGERPRINT moved to e4db2d7e) without any score changing. schema 2.2.0
+ *    (Prerequisite P) EXPANDED it again to cover each formula-defined component's formula +
+ *    bounds and the specs of the variables it references, so a 2.1.0 fingerprint (e4db2d7e)
+ *    and a 2.2.0 fingerprint again differ at identical weights without any score changing —
+ *    P made formulas reproducibility-tracked BEFORE Stage F makes them user-editable. Bump
  *    schemaVersion whenever the projected scope changes, and stamp it beside the
  *    fingerprint (the report footer does) so an old fingerprint stays interpretable
  *    rather than a bare mismatch.
  *  - Fingerprints are DERIVED (never stored), over COMPUTE-AFFECTING fields only
- *    (weights, enabled, invertPolarity, derived dependsOn, and the resolved lookup-table
- *    values a lookup component references — NOT labels/definitions/polarityLabel/version),
- *    so "fingerprint changed" means "the numbers changed".
+ *    (weights, enabled, invertPolarity, derived dependsOn, each formula-defined component's
+ *    formula + normalization bounds, the specs of the variables that formula references, and
+ *    the resolved values of every lookup table those variables read — NOT labels/definitions/
+ *    polarityLabel/version), so "fingerprint changed" means "the numbers changed".
  *  - configFingerprint (whole config) is the report-footer + drift anchor. It covers
  *    everything, including the lookup tables (Stage A), with no format change.
  *  - compositeFingerprint is dependency-aware (over the composite AND its transitive
@@ -60,22 +65,17 @@ export interface RiskComponent {
    */
   configuredIn?: string;
   /**
-   * For a `provenance: "lookup"` component, the id of the top-level `lookupTables` entry
-   * that supplies its 0-100 value (e.g. roster_concentration -> "concentration_curve").
-   * A table may be SHARED: concentration_curve backs BOTH supplyRisk.supply_concentration
-   * AND performanceRisk.roster_concentration, so editing it moves both scores. The
-   * fingerprint resolves this reference (projectComputeAffecting inlines the referenced
-   * table's values under the component), so a shared-table edit moves EVERY consumer's
-   * fingerprint. Absent on computed components (cost_premium) and the built-in dimensions.
-   */
-  lookupTable?: string;
-  /**
    * Stage D: whitelisted arithmetic over `variables` ids; the component's value is
    * normalize_to_bounds(evaluate(formula, env), bounds.lo, bounds.hi). Absent on the built-in
-   * sub-scores. ⚠️ NOT yet in the compute-affecting fingerprint (projectComputeAffecting) —
-   * formulas are not user-editable until Stage F, which must add formula + bounds + the
-   * referenced variable defs to the fingerprint (and drop lookupTable, resolving the table via
-   * the formula) BEFORE they become editable.
+   * sub-scores. IN the compute-affecting fingerprint since Prerequisite P (schema 2.2.0): the
+   * projection covers formula + bounds + the referenced variables' specs + the resolved content
+   * of every lookup table those variables read (projectComponentFormula), so editing a formula,
+   * a bound, a variable spec, or a shared table moves the fingerprint. Table references are
+   * DERIVED through formula -> variables -> table (componentTableRefs); the old per-component
+   * `lookupTable` field was DROPPED in P, because a composed formula can read several tables
+   * that one field cannot represent. A table may still be SHARED — concentration_curve backs
+   * BOTH supplyRisk.supply_concentration AND performanceRisk.roster_concentration — so editing
+   * it moves both scores' fingerprints (via each component's referenced tables).
    */
   formula?: string;
   bounds?: FormulaBounds;
@@ -229,19 +229,70 @@ export function dependenciesOf(composite: RiskComposite): string[] {
   return [...deps].sort();
 }
 
+/** The whitelisted formula functions (mirrors python/formula_eval.ALLOWED_FUNCS). They are
+ * RESERVED — never variable ids — so any identifier that is NOT one of them is a variable. */
+const RESERVED_FORMULA_FUNCS = new Set(["min", "max", "abs", "sqrt"]);
+// Matches a numeric literal (integer / decimal / scientific) OR an identifier, alternation
+// number-first so the exponent letter of `1e5` is consumed as part of the number and never
+// captured as a name. Only the identifier alternative captures (group 1).
+const FORMULA_TOKEN_RE = /(?:\d+\.?\d*(?:[eE][+-]?\d+)?|\.\d+(?:[eE][+-]?\d+)?)|([A-Za-z_][A-Za-z0-9_]*)/g;
+
+/**
+ * The variable ids a formula references — every identifier that is not a whitelisted function
+ * name (min/max/abs/sqrt), deduped and SORTED. The TS mirror of
+ * python/formula_eval.referenced_names for the fingerprint projection + the settings UI: the two
+ * implementations only have to agree on which names are VARIABLES, not on how a formula evaluates
+ * (only TS computes the fingerprint). Returned sorted so any collection built from it is order-
+ * independent (Prerequisite P addition 1).
+ */
+export function referencedVariables(formula: string): string[] {
+  const out = new Set<string>();
+  for (const m of formula.matchAll(FORMULA_TOKEN_RE)) {
+    const ident = m[1];
+    if (ident && !RESERVED_FORMULA_FUNCS.has(ident)) out.add(ident);
+  }
+  return [...out].sort();
+}
+
+/**
+ * The lookup tables a component's formula reads, via formula -> referenced variables -> each
+ * lookup variable's `table`, deduped and SORTED by table id. Replaces the dropped
+ * `component.lookupTable` field (Prerequisite P): a composed formula can read several tables,
+ * which one field could not represent. Empty for a built-in sub-score (no formula) or a
+ * computed-only formula (cost_premium). Used by consumersOfTable + the settings-UI badge, and
+ * mirrors the table set projectComponentFormula inlines into the fingerprint.
+ */
+export function componentTableRefs(
+  component: { formula?: string },
+  variables: CatalogueVariables,
+): string[] {
+  if (!component.formula) return [];
+  const ids = new Set<string>();
+  for (const id of referencedVariables(component.formula)) {
+    const v = variables[id];
+    if (v?.kind === "lookup" && v.table) ids.add(v.table);
+  }
+  return [...ids].sort();
+}
+
 /**
  * The components that reference a given lookup table, as "compositeId.componentId" strings
  * (sorted). A table with MORE THAN ONE consumer is SHARED: concentration_curve returns both
  * "performanceRisk.roster_concentration" and "supplyRisk.supply_concentration". The settings
  * grid (Stage B) uses this to name every composite an edit will move, so nobody edits a
- * shared curve thinking it is local to one composite. Derived from the references — there is
- * no stored consumer list to drift.
+ * shared curve thinking it is local to one composite. Resolved through each component's formula
+ * -> variables -> table (componentTableRefs) since Prerequisite P dropped component.lookupTable;
+ * there is no stored consumer list to drift.
  */
-export function consumersOfTable(tableId: string, composites: RiskComposite[]): string[] {
+export function consumersOfTable(
+  tableId: string,
+  composites: RiskComposite[],
+  variables: CatalogueVariables,
+): string[] {
   const out: string[] = [];
   for (const composite of composites) {
     for (const c of composite.components) {
-      if (c.lookupTable === tableId) out.push(`${composite.id}.${c.id}`);
+      if (componentTableRefs(c, variables).includes(tableId)) out.push(`${composite.id}.${c.id}`);
     }
   }
   return out.sort();
@@ -268,37 +319,74 @@ function projectLookupTable(table: LookupTable): Record<string, unknown> {
   return { input: table.input, ...projectTableContent(table.default, table.rows) };
 }
 
+// COMPUTE-AFFECTING projection of ONE formula-defined component (Prerequisite P): its formula
+// string, its normalization bounds, the compute-affecting spec of each referenced variable (a
+// lookup carries {key, table} — the var->table linkage, which is itself compute-affecting since
+// swapping which table a variable reads changes the score — a computed carries {resolver,
+// default}), and the resolved content of every lookup table those variables read. Returns
+// undefined for a built-in sub-score, which has no formula and contributes only enabled+weight,
+// exactly as before P.
+//
+// DETERMINISM (P addition 1): a formula may reference SEVERAL tables. `vars` is in referenced-
+// variable-id order (referencedVariables sorts) and `tables` is EXPLICITLY sorted by table id and
+// deduped, so the projection — and thus the hash — is identical regardless of the order the
+// variables appear in the formula string. The explicit `.sort()` is load-bearing; do not rely on
+// canonical()'s incidental key-sort (arrays preserve order). Guarded by scripts/fingerprint_check.ts.
+function projectComponentFormula(
+  component: RiskComponent,
+  variables: CatalogueVariables,
+  lookupTables: LookupTables,
+): Record<string, unknown> | undefined {
+  if (!component.formula) return undefined;
+  const bounds = component.bounds ?? { lo: 0, hi: 100 };
+  const tableIds = new Set<string>();
+  const vars = referencedVariables(component.formula).map((id) => {
+    const v = variables[id];
+    if (!v) return { id, missing: true };
+    if (v.kind === "lookup") {
+      if (v.table) tableIds.add(v.table);
+      return { id, kind: "lookup", key: v.key ?? null, table: v.table ?? null };
+    }
+    return { id, kind: "computed", resolver: v.resolver ?? null, default: v.default ?? null };
+  });
+  const tables = [...tableIds].sort().map((tid) => {
+    const t = lookupTables[tid];
+    // `missing` keeps the projection defined if a reference dangles (a malformed edit) rather
+    // than silently dropping the table.
+    return t ? { id: tid, ...projectLookupTable(t) } : { id: tid, missing: true };
+  });
+  return { formula: component.formula, bounds: { lo: bounds.lo, hi: bounds.hi }, vars, tables };
+}
+
 // COMPUTE-AFFECTING projection of ONE composite: only the fields that change a score —
-// invertPolarity, the derived dependency list, and per component {enabled, weight, and
-// the RESOLVED lookup table for a lookup component}. Deliberately excludes label/
-// definition/provenance/builtin/polarityLabel/shortLabel/version.
-// (Stage A adds the resolved lookup values under each lookup component here; Stage D
-// will add per-component formula bounds the same way.)
+// invertPolarity, the derived dependency list, and per component {enabled, weight, and — for a
+// formula-defined component — its formula + bounds + referenced-variable specs + resolved tables
+// (projectComponentFormula)}. Deliberately excludes label/definition/provenance/builtin/
+// polarityLabel/shortLabel/version.
+// (Stage A inlined the resolved lookup values under each lookup component; Prerequisite P, schema
+// 2.2.0, replaced that with formula + bounds + the variable defs and DROPPED the per-component
+// lookupTable field, resolving tables through formula -> variables -> table. Editing a SHARED
+// table (concentration_curve) still moves EVERY consumer's fingerprint — supplyRisk AND
+// performanceRisk directly, performanceComposite transitively through its risk_score dependency.)
 function projectComputeAffecting(
   composite: RiskComposite,
   lookupTables: LookupTables,
+  variables: CatalogueVariables,
 ): Record<string, unknown> {
   const components: Record<string, unknown> = {};
   for (const c of composite.components) {
     // A DISABLED component's weight is dropped by resolveEffectiveWeights, so it reaches
-    // no score — omit it (and its lookup) so the fingerprint tracks EXACTLY the values
-    // that determine the numbers. Editing a parked (disabled) weight or its table must
-    // not move the fingerprint; it would otherwise bump a version + trigger a recompute
+    // no score — project only {enabled:false} so the fingerprint tracks EXACTLY the values
+    // that determine the numbers. Editing a parked (disabled) weight, formula, or its table
+    // must not move the fingerprint; it would otherwise bump a version + trigger a recompute
     // for byte-identical output.
     if (!c.enabled) {
       components[c.id] = { enabled: false };
       continue;
     }
     const entry: Record<string, unknown> = { enabled: true, weight: c.weight };
-    // Resolve + inline the referenced table's values, so editing a SHARED table
-    // (concentration_curve) moves the fingerprint of EVERY composite referencing it —
-    // supplyRisk AND performanceRisk directly, and performanceComposite transitively
-    // through its risk_score dependency. `missing` keeps the projection defined if a
-    // reference dangles (a malformed edit) rather than silently dropping the table.
-    if (c.lookupTable) {
-      const table = lookupTables[c.lookupTable];
-      entry.lookup = table ? projectLookupTable(table) : { missing: c.lookupTable };
-    }
+    const formulaProj = projectComponentFormula(c, variables, lookupTables);
+    if (formulaProj) Object.assign(entry, formulaProj);
     components[c.id] = entry;
   }
   return {
@@ -311,15 +399,17 @@ function projectComputeAffecting(
 /**
  * Whole-config fingerprint over the compute-affecting projection of ALL composites — the
  * report-footer stamp and the drift anchor. Changes iff some score-determining value
- * changes anywhere (incl. a dependency edit, or — in Stage 4 — a lookup value), even if
- * a version bump was forgotten. Independent of labels and version strings.
+ * changes anywhere (a weight/enabled/dependency edit, a lookup-table value, or — since
+ * Prerequisite P — a formula, bounds, or referenced-variable edit), even if a version bump
+ * was forgotten. Independent of labels and version strings.
  */
 export function configFingerprint(
   composites: RiskComposite[],
   lookupTables: LookupTables,
+  variables: CatalogueVariables,
 ): string {
   const proj: Record<string, unknown> = {};
-  for (const c of composites) proj[c.id] = projectComputeAffecting(c, lookupTables);
+  for (const c of composites) proj[c.id] = projectComputeAffecting(c, lookupTables, variables);
   return fnv1a(canonical(proj));
 }
 
@@ -334,6 +424,7 @@ export function compositeFingerprint(
   id: string,
   composites: RiskComposite[],
   lookupTables: LookupTables,
+  variables: CatalogueVariables,
 ): string {
   const byId = new Map<string, RiskComposite>(composites.map((c) => [c.id, c]));
   const build = (cid: string, path: Set<string>): unknown => {
@@ -343,7 +434,7 @@ export function compositeFingerprint(
     const next = new Set(path).add(cid);
     const deps: Record<string, unknown> = {};
     for (const d of dependenciesOf(c)) deps[d] = build(d, next);
-    return { self: projectComputeAffecting(c, lookupTables), deps };
+    return { self: projectComputeAffecting(c, lookupTables, variables), deps };
   };
   return fnv1a(canonical(build(id, new Set())));
 }
@@ -352,6 +443,7 @@ export function compositeFingerprint(
 export const RISK_MODEL_FINGERPRINT: string = configFingerprint(
   RISK_MODEL.composites,
   RISK_MODEL.lookupTables,
+  RISK_MODEL.variables ?? {},
 );
 
 /**
@@ -596,7 +688,7 @@ export interface ConfigStamp {
 export function buildConfigStamp(model: RiskModel): ConfigStamp {
   return {
     schemaVersion: model.schemaVersion,
-    fingerprint: configFingerprint(model.composites, model.lookupTables),
+    fingerprint: configFingerprint(model.composites, model.lookupTables, model.variables ?? {}),
     composites: model.composites.map((c) => ({
       id: c.id,
       shortLabel: c.shortLabel,

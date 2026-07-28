@@ -16,6 +16,7 @@ import {
   configFingerprint,
   compositeFingerprint,
   consumersOfTable,
+  componentTableRefs,
   nextVersion,
   normalizeLookupTableEdit,
   WEIGHT_SUM_TOL,
@@ -62,7 +63,8 @@ function parse(d: DraftComposite): RiskComposite {
       weight: Number.parseFloat(c.weightStr),
       builtin: c.builtin,
       configuredIn: c.configuredIn,
-      lookupTable: c.lookupTable,
+      formula: c.formula,
+      bounds: c.bounds,
     })),
   };
 }
@@ -160,7 +162,7 @@ export function RiskModelSettings({
 
   const parsed = draft.map(parse);
   const statuses = parsed.map(statusOf);
-  const configFp = configFingerprint(active.composites, active.lookupTables);
+  const configFp = configFingerprint(active.composites, active.lookupTables, active.variables ?? {});
 
   // Per-composite dirty: any component's weight/enabled differs from the SAVED (active).
   function isDirty(i: number): boolean {
@@ -285,7 +287,7 @@ export function RiskModelSettings({
   // Readable consumer descriptors for a lookup table ("supply-risk · Supply concentration"),
   // derived from consumersOfTable (never hardcoded) so a shared table names both consumers.
   function consumerDescriptors(tableId: string): string[] {
-    return consumersOfTable(tableId, active.composites).map((ref) => {
+    return consumersOfTable(tableId, active.composites, active.variables ?? {}).map((ref) => {
       const [cid, compId] = ref.split(".");
       const composite = active.composites.find((c) => c.id === cid);
       const component = composite?.components.find((x) => x.id === compId);
@@ -360,7 +362,7 @@ export function RiskModelSettings({
           const dirty = isDirty(ci);
           const saving = savingId === composite.id;
           const busy = savingId !== null;
-          const compositeFp = compositeFingerprint(composite.id, active.composites, active.lookupTables);
+          const compositeFp = compositeFingerprint(composite.id, active.composites, active.lookupTables, active.variables ?? {});
           const canReset = !activeAtDefaults(ci);
           const confirming = confirmingResetId === composite.id;
           const err = errorById[composite.id];
@@ -409,6 +411,9 @@ export function RiskModelSettings({
                     const producer = comp.configuredIn
                       ? parsed.find((c) => c.id === comp.configuredIn)
                       : undefined;
+                    // Lookup tables this component's formula reads (formula -> variables -> table),
+                    // replacing the dropped per-component lookupTable field (Prerequisite P).
+                    const tableRefs = componentTableRefs(comp, active.variables ?? {});
                     return (
                       <div
                         key={comp.id}
@@ -449,14 +454,16 @@ export function RiskModelSettings({
                               {eff != null ? pct(eff) : "weight"}, they do not add.
                             </p>
                           )}
-                          {comp.lookupTable && (
+                          {tableRefs.length > 0 && (
                             <p className="mt-1 text-xs text-muted-foreground">
                               Reads the{" "}
                               <span className="font-medium">
-                                {active.lookupTables[comp.lookupTable]?.label ?? comp.lookupTable}
+                                {tableRefs
+                                  .map((tid) => active.lookupTables[tid]?.label ?? tid)
+                                  .join(", ")}
                               </span>{" "}
-                              lookup table (in <span className="font-medium">Lookup tables</span>{" "}
-                              below).
+                              lookup {tableRefs.length > 1 ? "tables" : "table"} (in{" "}
+                              <span className="font-medium">Lookup tables</span> below).
                             </p>
                           )}
                         </div>
@@ -609,7 +616,7 @@ export function RiskModelSettings({
             <div key={composite.id} className="mt-2">
               <p className="text-sm font-medium text-foreground">
                 {composite.label} — v{composite.version} ·{" "}
-                {compositeFingerprint(composite.id, active.composites, active.lookupTables)}
+                {compositeFingerprint(composite.id, active.composites, active.lookupTables, active.variables ?? {})}
               </p>
               <table className="w-full text-xs">
                 <thead>
