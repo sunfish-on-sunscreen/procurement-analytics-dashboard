@@ -205,6 +205,80 @@ def test_variable_validation():
     rejects(break_ref, "unknown variable")
     # (Prerequisite P dropped component.lookupTable; table references now derive from
     # formula -> variables -> table, so there is no lookupTable/formula check to exercise.)
+    # Stage E: an aggregate variable needs a valid agg (risk_config.AGG_FUNCS).
+    rejects(
+        lambda m: m["variables"].__setitem__(
+            "bad_agg", {"kind": "aggregate", "source": "quantity", "agg": "nope", "default": 0.0}),
+        "agg",
+    )
+
+
+def test_aggregate_resolver():
+    # Stage E: the generic aggregate resolver reproduces the operational aggregates from a
+    # snake_case PO frame, and build_aggregate_maps builds ONLY the aggregate variables in the
+    # referenced set (lookups/computed resolved elsewhere).
+    pur = pd.DataFrame({
+        "supplier_id": ["A", "A", "B"],
+        "on_time_delivery": [True, False, True],
+        "po_to_delivery_days": [10.0, 20.0, 30.0],
+        "total_cycle_days": [40.0, 60.0, 80.0],
+        "three_way_match_pass": [True, True, False],
+        "complaint_count": [0, 1, 2],
+        "defect_count": [2, 0, 5],
+        "quantity": [50.0, 50.0, 100.0],
+        "total_value_usd": [100.0, 300.0, 600.0],
+    })
+
+    def agg(src, a, grand=0.0):
+        return scores.build_aggregate_map(pur, src, a, grand)
+
+    assert agg("on_time_delivery", "rate_pct") == {"A": 50.0, "B": 100.0}
+    assert agg("po_to_delivery_days", "mean") == {"A": 15.0, "B": 30.0}
+    assert agg("total_cycle_days", "mean") == {"A": 50.0, "B": 80.0}
+    assert agg("three_way_match_pass", "rate_pct") == {"A": 100.0, "B": 0.0}
+    assert agg("complaint_count", "share_ge1_pct") == {"A": 50.0, "B": 100.0}
+    assert agg("defect_count", "defect_ratio_pct") == {"A": 2.0, "B": 5.0}  # 2/100, 5/100 x100
+    assert agg("total_value_usd", "spend_share_pct", 1000.0) == {"A": 40.0, "B": 60.0}
+
+    maps = scores.build_aggregate_maps(
+        pur, {"on_time_rate", "country_distance"},
+        {"on_time_rate": {"kind": "aggregate", "source": "on_time_delivery", "agg": "rate_pct"},
+         "country_distance": {"kind": "lookup"}},
+    )
+    assert set(maps) == {"on_time_rate"}  # only the aggregate id is built
+
+
+def test_builtin_input_block():
+    # Stage E structural double-count block, graph-derived. The shipped config passes;
+    # a builtin-input variable in performanceRisk is rejected; the same in supplyRisk is
+    # allowed; a non-builtin behavioural variable in performanceRisk is allowed.
+    base = risk_config.load_risk_model()
+    risk_config.validate_builtin_input_block(base)  # shipped config: no block
+
+    def perf_risk_formula(model, formula):
+        m = copy.deepcopy(model)
+        for c in m["composites"]:
+            if c["id"] == "performanceRisk":
+                c["components"][0]["formula"] = formula
+        return m
+
+    # on_time_rate feeds delivery_score -> BLOCKED in performanceRisk (produces risk_score)
+    try:
+        risk_config.validate_builtin_input_block(
+            perf_risk_formula(base, "country_distance + on_time_rate"))
+        assert False, "expected a block for a builtin-input variable in performanceRisk"
+    except ValueError as e:
+        assert "BLOCKED" in str(e) and "on_time_rate" in str(e), str(e)
+
+    # cycle_time has no feedsBuiltin -> allowed in performanceRisk
+    risk_config.validate_builtin_input_block(perf_risk_formula(base, "country_distance + cycle_time"))
+
+    # the same builtin-input variable in supplyRisk (produces no builtin) -> allowed
+    m2 = copy.deepcopy(base)
+    for c in m2["composites"]:
+        if c["id"] == "supplyRisk":
+            c["components"][0]["formula"] = "supply_concentration + on_time_rate"
+    risk_config.validate_builtin_input_block(m2)
 
 
 def test_lookup_table_validation():

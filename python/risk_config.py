@@ -27,6 +27,12 @@ _CONFIG_PATH = os.path.normpath(os.path.join(_HERE, "..", "config", "risk-model.
 # genuinely malformed config (e.g. 0.5/0.3/0.25 = 1.05).
 WEIGHT_SUM_TOL = 1e-9
 
+# The aggregation vocabulary for `aggregate` catalogue variables (Stage E) — the ONLY
+# allowed `agg` values, so the set of per-supplier aggregations stays under our control
+# rather than the user's (a catalogue-design constraint). scores.build_aggregate_map is
+# the dispatcher; this is the validator's copy so a hand-edited config fails at load.
+AGG_FUNCS = ("mean", "rate_pct", "share_ge1_pct", "defect_ratio_pct", "spend_share_pct")
+
 
 @functools.lru_cache(maxsize=1)
 def load_risk_model(path=None):
@@ -136,6 +142,15 @@ def validate_variables(model):
         elif kind == "computed":
             if not isinstance(var.get("default"), (int, float)) or isinstance(var.get("default"), bool):
                 raise ValueError(f"risk-model variable '{vid}': a computed variable needs a numeric 'default'")
+        elif kind == "aggregate":
+            if not isinstance(var.get("source"), str) or not var.get("source"):
+                raise ValueError(f"risk-model variable '{vid}': an aggregate variable needs a 'source' column")
+            if var.get("agg") not in AGG_FUNCS:
+                raise ValueError(
+                    f"risk-model variable '{vid}': aggregate 'agg' must be one of {AGG_FUNCS}, got {var.get('agg')!r}"
+                )
+            if not isinstance(var.get("default"), (int, float)) or isinstance(var.get("default"), bool):
+                raise ValueError(f"risk-model variable '{vid}': an aggregate variable needs a numeric 'default'")
         else:
             raise ValueError(f"risk-model variable '{vid}': unknown kind {kind!r}")
 
@@ -157,6 +172,47 @@ def validate_variables(model):
                     raise ValueError(
                         f"risk-model composite '{composite['id']}' component '{comp['id']}': "
                         f"formula references unknown variable {ref!r}"
+                    )
+
+    validate_builtin_input_block(model)
+
+
+def validate_builtin_input_block(model):
+    """Stage E structural double-count guard, DERIVED from the dependency graph (never
+    hardcoded). A variable declares `feedsBuiltin` = the builtin sub-score it is an input
+    to (defect/complaint -> quality_score, on-time/lead -> delivery_score, 3-way-match ->
+    process_score). A composite that PRODUCES a builtin sub-score (via a component's
+    `configuredIn`, e.g. performanceRisk -> risk_score) must NOT reference a variable that
+    feeds a SIBLING builtin of what it produces: that field would enter the parent composite
+    (performanceComposite) twice at different weights, multiplying rather than adding — the
+    Stage-1 hazard one level deeper. A variable feeding the composite's OWN produced builtin
+    is fine (that is the definition, not a duplicate). supplyRisk produces no builtin, so it
+    is never blocked (its note is a UI concern, not an arithmetic error). Rejected at LOAD so
+    a hand-edited config cannot smuggle a double-count past the settings-UI block."""
+    variables = model.get("variables", {})
+    builtins_of_parent, produced_by, parent_of_builtin = {}, {}, {}
+    for composite in model["composites"]:
+        for comp in composite["components"]:
+            if comp.get("builtin"):
+                builtins_of_parent.setdefault(composite["id"], set()).add(comp["id"])
+                parent_of_builtin[comp["id"]] = composite["id"]
+            if comp.get("configuredIn"):
+                produced_by[comp["configuredIn"]] = comp["id"]
+    for composite in model["composites"]:
+        produced = produced_by.get(composite["id"])  # e.g. performanceRisk -> "risk_score"
+        if not produced:
+            continue
+        siblings = builtins_of_parent.get(parent_of_builtin.get(produced), set())
+        for comp in composite["components"]:
+            if not comp.get("enabled", True) or not comp.get("formula"):
+                continue
+            for ref in formula_eval.referenced_names(comp["formula"]):
+                fb = variables.get(ref, {}).get("feedsBuiltin")
+                if fb and fb != produced and fb in siblings:
+                    raise ValueError(
+                        f"risk-model: variable {ref!r} feeds builtin {fb!r} and is BLOCKED in "
+                        f"composite {composite['id']!r} (which produces sibling builtin "
+                        f"{produced!r}) — it would enter the composite twice"
                     )
 
 

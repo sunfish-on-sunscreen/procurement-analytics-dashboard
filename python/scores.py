@@ -163,11 +163,13 @@ def build_period_metrics(metrics: pd.DataFrame, purchases: pd.DataFrame) -> pd.D
     return pd.DataFrame(rows)
 
 
-def compute_scores(m: pd.DataFrame, roster_cat_counts: dict) -> pd.DataFrame:
+def compute_scores(m: pd.DataFrame, roster_cat_counts: dict, agg_maps: dict = None) -> pd.DataFrame:
     """Add the five derived score columns IN PLACE-ish (returns m). Fixed bounds;
     fully deterministic. `roster_cat_counts` = category -> full-roster supplier
     count (all known suppliers, active or not), used for the roster-based
-    concentration term in risk_score.
+    concentration term in risk_score. `agg_maps` (Stage E) = {var_id -> {supplier_id ->
+    float}} for any AGGREGATE variable the performanceRisk formula references; None/{} for
+    the shipped config (which references only lookups), so the default path is unchanged.
 
     Quality now comes from the per-PO-derived defect_rate_pct + complaint_rate_pct;
     the Service dimension was removed; risk is PURELY STRUCTURAL (country distance +
@@ -208,7 +210,7 @@ def compute_scores(m: pd.DataFrame, roster_cat_counts: dict) -> pd.DataFrame:
             "country": r.get("country", ""),
             "roster_other_count": other,
         }
-        env = risk_config.resolve_env(_referenced, key_values, {})
+        env = risk_config.resolve_env(_referenced, key_values, agg_maps or {})
         score, _contrib = risk_config.evaluate_composite(_cfg, env)
         new_risk.append(score)
     m["risk_score"] = np.round(new_risk, 2)
@@ -256,6 +258,72 @@ def rename_purchase_columns(purchases: pd.DataFrame) -> pd.DataFrame:
     return purchases.rename(columns=_PURCHASE_CAMEL_TO_SNAKE)
 
 
+# --------------------------------------------------------------------------- #
+# Aggregate variable resolver (Stage E). A catalogue `aggregate` variable declares a
+# `source` (snake_case PO column) + an `agg`; this GENERIC resolver produces its
+# {supplier_id -> float} map from the window's PO frame — so adding an aggregate variable
+# to the catalogue is a CONFIG edit, never a new resolver. The evaluator never sees a PO
+# row (Stage D contract): the map is built here and injected into env via resolve_env.
+# INERT until a formula references the variable: build_aggregate_maps only builds maps for
+# ids in the `referenced` set, and no shipped formula references an aggregate variable, so
+# the scoring path is byte-identical (harness md5 unchanged).
+_AGG_FUNCS = risk_config.AGG_FUNCS  # single source of the allowed aggregations
+
+
+def build_aggregate_map(purchases: pd.DataFrame, source: str, agg: str,
+                        grand_spend: float = 0.0) -> dict:
+    """One aggregate variable's {supplier_id -> float} over a snake_case PO frame grouped
+    by supplier. `mean` = column mean; `rate_pct` = boolean-column share x100; `share_ge1_pct`
+    = share of POs with source>=1 x100; `defect_ratio_pct` = sum(defect_count)/sum(quantity)x100
+    (source ignored — the ratio is fixed); `spend_share_pct` = supplier spend / portfolio spend
+    x100. No rounding — the composite rounds once at the end."""
+    g = purchases.groupby("supplier_id", sort=True)
+    if agg == "mean":
+        s = g[source].mean()
+    elif agg == "rate_pct":
+        s = g[source].mean() * 100.0
+    elif agg == "share_ge1_pct":
+        s = g[source].apply(lambda x: float((x >= 1).mean())) * 100.0
+    elif agg == "defect_ratio_pct":
+        def _ratio(x):
+            q = float(x["quantity"].sum())
+            return (float(x["defect_count"].sum()) / q * 100.0) if q > 0 else 0.0
+        s = g.apply(_ratio)
+    elif agg == "spend_share_pct":
+        denom = grand_spend if grand_spend else 1.0
+        s = g[source].sum() / denom * 100.0
+    else:
+        raise ValueError(f"unknown aggregate agg {agg!r} (allowed: {_AGG_FUNCS})")
+    return {str(k): float(v) for k, v in s.items()}
+
+
+def build_aggregate_maps(purchases: pd.DataFrame, referenced_ids, variables: dict) -> dict:
+    """Build the {supplier_id -> float} maps for the AGGREGATE variables in `referenced_ids`
+    (lookups + computed are resolved elsewhere). Empty when no aggregate variable is
+    referenced — the shipped-config case, so this is a no-op on the default scoring path."""
+    if not len(purchases):
+        return {}
+    grand = float(purchases["total_value_usd"].sum())
+    maps = {}
+    for vid in referenced_ids:
+        var = variables.get(vid)
+        if var and var.get("kind") == "aggregate":
+            maps[vid] = build_aggregate_map(purchases, var.get("source"), var["agg"], grand)
+    return maps
+
+
+def _performance_risk_aggregate_maps(purchases: pd.DataFrame) -> dict:
+    """Aggregate maps for the AGGREGATE variables the performanceRisk formula references,
+    built from this window's (snake_case) PO frame. Empty for the shipped config (its
+    performanceRisk references only lookup variables)."""
+    cfg = risk_config.get_composite("performanceRisk")
+    referenced = set()
+    for comp in cfg["components"]:
+        if comp.get("enabled", True):
+            referenced |= formula_eval.referenced_names(comp["formula"])
+    return build_aggregate_maps(purchases, referenced, risk_config.get_variables())
+
+
 def build_window_metrics(
     metrics: pd.DataFrame, purchases: pd.DataFrame, roster_cat_counts: dict
 ) -> pd.DataFrame:
@@ -288,4 +356,8 @@ def build_window_metrics(
             row[c] = snap[c]
         rows.append(row)
 
-    return compute_scores(pd.DataFrame(rows), roster_cat_counts)
+    # Stage E: aggregate maps for any AGGREGATE variable performanceRisk references, built
+    # from THIS window's PO frame (empty for the shipped config). Passed to compute_scores so
+    # risk_score can read a behavioural field if a formula composes one.
+    agg_maps = _performance_risk_aggregate_maps(purchases)
+    return compute_scores(pd.DataFrame(rows), roster_cat_counts, agg_maps)

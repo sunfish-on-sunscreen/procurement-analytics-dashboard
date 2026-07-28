@@ -26,6 +26,7 @@ import {
   compositeFingerprint,
   referencedVariables,
   componentTableRefs,
+  builtinInputBlockedIn,
   type RiskModel,
   type RiskComposite,
   type RiskComponent,
@@ -162,6 +163,34 @@ check("computed-variable default edit moves the fingerprint", cfp(mVarDefault) !
 const mVarKey = clone(RISK_MODEL);
 if (mVarKey.variables?.country_distance) mVarKey.variables.country_distance.key = "country_alt";
 check("lookup-variable key edit moves the fingerprint", cfp(mVarKey) !== base);
+
+// K. Aggregate variables (Stage E): a formula referencing one carries its source + agg into
+//    the fingerprint; eta2 + feedsBuiltin are display/validation metadata and stay OUT.
+const aggBase = clone(RISK_MODEL);
+component(aggBase, "supplyRisk", "cost_premium").formula = "cost_premium + cycle_time";
+const aggFp = cfp(aggBase);
+check("referencing an aggregate variable moves the fingerprint", aggFp !== base);
+const aggAggEdit = clone(aggBase);
+aggAggEdit.variables!.cycle_time.agg = "median";
+check("aggregate 'agg' edit moves the fingerprint", cfp(aggAggEdit) !== aggFp);
+const aggSrcEdit = clone(aggBase);
+aggSrcEdit.variables!.cycle_time.source = "invoice_to_payment_days";
+check("aggregate 'source' edit moves the fingerprint", cfp(aggSrcEdit) !== aggFp);
+const aggMetaEdit = clone(aggBase);
+aggMetaEdit.variables!.cycle_time.eta2 = { category: 0, country: 0 };
+aggMetaEdit.variables!.cycle_time.feedsBuiltin = "delivery_score";
+check("aggregate eta2/feedsBuiltin edits do NOT move the fingerprint", cfp(aggMetaEdit) === aggFp);
+
+// L. builtinInputBlockedIn (Stage E) — the graph-derived double-count block.
+// (reuses `vars` from check C)
+check("builtin-input variable BLOCKED in performanceRisk",
+  builtinInputBlockedIn(vars.on_time_rate, "performanceRisk", RISK_MODEL.composites) !== null);
+check("builtin-input variable ALLOWED in supplyRisk (produces no builtin)",
+  builtinInputBlockedIn(vars.on_time_rate, "supplyRisk", RISK_MODEL.composites) === null);
+check("non-builtin variable ALLOWED in performanceRisk",
+  builtinInputBlockedIn(vars.cycle_time, "performanceRisk", RISK_MODEL.composites) === null);
+check("risk_score-input variable ALLOWED in performanceRisk (its own output)",
+  builtinInputBlockedIn(vars.roster_concentration, "performanceRisk", RISK_MODEL.composites) === null);
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

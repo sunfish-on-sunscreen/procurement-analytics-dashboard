@@ -1277,6 +1277,17 @@ def compute_supply_risk(purchases, suppliers, metrics):
         if comp.get("enabled", True):
             referenced |= formula_eval.referenced_names(comp["formula"])
 
+    # Stage E: AGGREGATE variables (behavioural fields) the supplyRisk formula references
+    # resolve via the GENERIC aggregate resolver over this window's PO frame (renamed to the
+    # snake_case columns scores.build_aggregate_map reads). Empty for the shipped config
+    # (supplyRisk references supply_concentration + cost_premium + import_friction only), so
+    # computed_maps is unchanged and the score is byte-identical.
+    computed_maps.update(
+        scores.build_aggregate_maps(
+            scores.rename_purchase_columns(purchases), referenced, risk_config.get_variables()
+        )
+    )
+
     # Evaluate the supplyRisk composite per supplier through THE formula evaluator (env resolved
     # outside it). Byte-identical to the old vectorized weight*normalized sum: single-atom
     # formulas + (0,100) bounds make normalize_to_bounds a x1.0 identity, and evaluate_composite

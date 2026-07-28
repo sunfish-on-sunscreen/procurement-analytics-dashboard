@@ -144,11 +144,30 @@ export type LookupTables = Record<string, LookupTable>;
  */
 export interface CatalogueVariable {
   label: string;
-  kind: "lookup" | "computed";
+  kind: "lookup" | "computed" | "aggregate";
   table?: string;
   key?: string;
   resolver?: string;
+  /** `aggregate` (Stage E): the snake_case PO column the generic resolver aggregates. */
+  source?: string;
+  /** `aggregate` (Stage E): the aggregation (risk_config.AGG_FUNCS). Compute-affecting. */
+  agg?: string;
   default?: number;
+  /**
+   * The builtin sub-score this variable is an INPUT to (Stage E), or absent if none
+   * (e.g. defect_rate -> "quality_score", on_time_rate -> "delivery_score"). Drives the
+   * structural double-count block: a builtin-input variable is BLOCKED in any composite that
+   * produces a SIBLING builtin (see builtinInputBlockedIn). Declared, not inferred. NOT
+   * compute-affecting — excluded from the fingerprint.
+   */
+  feedsBuiltin?: string;
+  /**
+   * Measured discrimination (Stage E): one-way ANOVA eta-squared of the per-supplier value
+   * against category / country on the baseline dataset (scripts/measure_catalogue_eta.py).
+   * DISPLAY metadata shown beside the variable in the picker — flag, never a gate; high eta²
+   * is not disqualifying (country tier legitimately IS country). NOT compute-affecting.
+   */
+  eta2?: { category: number; country: number };
 }
 export type CatalogueVariables = Record<string, CatalogueVariable>;
 
@@ -227,6 +246,39 @@ export function dependenciesOf(composite: RiskComposite): string[] {
   const deps = new Set<string>();
   for (const c of composite.components) if (c.configuredIn) deps.add(c.configuredIn);
   return [...deps].sort();
+}
+
+/**
+ * The Stage-E structural double-count block, DERIVED from the dependency graph (never
+ * hardcoded). A variable declaring `feedsBuiltin` = B_v is BLOCKED in a composite C that
+ * PRODUCES a sibling builtin B_C (B_C ≠ B_v, same parent composite), because placing it there
+ * feeds the parent composite (performanceComposite) twice at different weights — the Stage-1
+ * multiply-not-add hazard one level deeper. Not blocked when: the variable feeds nothing; C
+ * produces no builtin (supplyRisk — the Kraljic Y-axis, which gets a UI design NOTE, not a
+ * block); or B_v IS what C produces (that is the composite's own definition, not a duplicate).
+ * Returns the block details (for the message) or null. Mirrors
+ * python/risk_config.validate_builtin_input_block — the settings UI + save route both call this;
+ * Python re-checks at load so a hand-edited config cannot bypass it.
+ */
+export function builtinInputBlockedIn(
+  variable: Pick<CatalogueVariable, "feedsBuiltin">,
+  compositeId: string,
+  composites: RiskComposite[],
+): { producedBuiltin: string; feedsBuiltin: string } | null {
+  const fb = variable.feedsBuiltin;
+  if (!fb) return null;
+  const parentOfBuiltin = new Map<string, string>();
+  const producedBy = new Map<string, string>(); // composite id -> the builtin it produces
+  for (const c of composites) {
+    for (const comp of c.components) {
+      if (comp.builtin) parentOfBuiltin.set(comp.id, c.id);
+      if (comp.configuredIn) producedBy.set(comp.configuredIn, comp.id);
+    }
+  }
+  const produced = producedBy.get(compositeId);
+  if (!produced || fb === produced) return null;
+  if (parentOfBuiltin.get(fb) !== parentOfBuiltin.get(produced)) return null; // not a sibling
+  return { producedBuiltin: produced, feedsBuiltin: fb };
 }
 
 /** The whitelisted formula functions (mirrors python/formula_eval.ALLOWED_FUNCS). They are
@@ -346,6 +398,11 @@ function projectComponentFormula(
     if (v.kind === "lookup") {
       if (v.table) tableIds.add(v.table);
       return { id, kind: "lookup", key: v.key ?? null, table: v.table ?? null };
+    }
+    if (v.kind === "aggregate") {
+      // source + agg are compute-affecting (they select the value); feedsBuiltin + eta2 are
+      // display/validation metadata and stay OUT of the projection.
+      return { id, kind: "aggregate", source: v.source ?? null, agg: v.agg ?? null, default: v.default ?? null };
     }
     return { id, kind: "computed", resolver: v.resolver ?? null, default: v.default ?? null };
   });
