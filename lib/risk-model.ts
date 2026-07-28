@@ -789,16 +789,44 @@ export function mergeAndBumpVersions(
       kept.push(next);
     }
 
-    // 2. APPEND new components (edit ids not on disk) at the END, in edit order — a new term is
-    //    summed last, so surviving components' float summation order is untouched.
-    const appended: RiskComponent[] = [];
+    // 2. Add edit ids not on disk. A genuinely NEW custom component is appended LAST (correct — a
+    //    new term sums last, surviving order untouched). But a RESET re-adding a removed SHIPPED
+    //    component must return it to its SHIPPED POSITION, not the end: float summation order is
+    //    part of the byte-identity, so appending a middle component last would silently reorder the
+    //    weighted sum. Restored known-default components are threaded back in defaults-file order;
+    //    genuinely new customs still append last. Split the additions accordingly.
+    const defaults = RISK_MODEL_DEFAULTS.composites[composite.id];
+    const restoredDefaults: RiskComponent[] = [];
+    const newCustom: RiskComponent[] = [];
     for (const e of editOrderById.get(composite.id) ?? []) {
       if (currentIds.has(e.id)) continue;
-      appended.push(newComponentFromEdit(e, variables));
+      const built = newComponentFromEdit(e, variables);
+      if (defaults?.some((d) => d.id === e.id)) restoredDefaults.push(built);
+      else newCustom.push(built);
       changed = true;
     }
 
-    const components = [...kept, ...appended];
+    // When a shipped default is being restored (reset-to-defaults), re-thread the shipped
+    // components (surviving + restored) into their defaults-file order; kept CUSTOM components keep
+    // their order; genuinely new customs go last. When nothing is restored — the common
+    // add/edit/remove case — this is byte-identical to a plain [...kept, ...newCustom]. Surviving
+    // shipped components are already in defaults order (removals preserve order, adds go last), so
+    // the ONLY thing this moves is a re-added default back to its shipped slot.
+    let components: RiskComponent[];
+    if (defaults && restoredDefaults.length > 0) {
+      const restoredById = new Map(restoredDefaults.map((c) => [c.id, c]));
+      const keptById = new Map(kept.map((c) => [c.id, c]));
+      const shippedIds = new Set(defaults.map((d) => d.id));
+      const shippedOrdered: RiskComponent[] = [];
+      for (const d of defaults) {
+        const c = restoredById.get(d.id) ?? keptById.get(d.id);
+        if (c) shippedOrdered.push(c);
+      }
+      const keptCustoms = kept.filter((c) => !shippedIds.has(c.id));
+      components = [...shippedOrdered, ...keptCustoms, ...newCustom];
+    } else {
+      components = [...kept, ...newCustom];
+    }
     if (!changed) return { ...composite, components };
     changedIds.push(composite.id);
     return { ...composite, components, version: nextVersion(composite.version) };

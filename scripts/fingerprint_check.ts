@@ -356,6 +356,47 @@ check(
   compositeAtDefaults(shipped, RISK_MODEL_DEFAULTS) && !compositeAtDefaults(mutated, RISK_MODEL_DEFAULTS),
 );
 
+// P.2 ORDER BUG — remove a MIDDLE component through the MERGE, then reset through the merge, and
+// confirm the list matches shipped EXACTLY INCLUDING ORDER. A re-added shipped component must
+// return to its shipped slot, not be appended last (float summation order is part of the identity).
+// This exercises the SAVE path (mergeAndBumpVersions) both ways, not just the pure reset helper.
+{
+  const shippedSup = composite(RISK_MODEL, "supplyRisk");
+  const survivors = shippedSup.components.filter((c) => c.id !== "cost_premium"); // cost_premium = index 1 (MIDDLE)
+  const totalW = survivors.reduce((s, c) => s + c.weight, 0);
+  const afterRemove = mergeAndBumpVersions(RISK_MODEL, [
+    {
+      id: "supplyRisk",
+      components: survivors.map((c) => ({ id: c.id, enabled: c.enabled, weight: c.weight / totalW, formula: c.formula, bounds: c.bounds })),
+    },
+  ]).merged;
+  const removedSup = composite(afterRemove, "supplyRisk");
+  check(
+    "merge REMOVE drops the middle component",
+    removedSup.components.map((c) => c.id).join(",") === "supply_concentration,import_friction",
+  );
+  const resetSup = resetCompositeToDefaults(removedSup, RISK_MODEL_DEFAULTS);
+  const afterReset = composite(
+    mergeAndBumpVersions(afterRemove, [
+      {
+        id: "supplyRisk",
+        components: resetSup.components.map((c) => ({ id: c.id, enabled: c.enabled, weight: c.weight, formula: c.formula, bounds: c.bounds, label: c.label, definition: c.definition })),
+      },
+    ]).merged,
+    "supplyRisk",
+  );
+  check(
+    "merge RESET restores shipped ORDER (re-added default returns to its slot, not last)",
+    afterReset.components.map((c) => c.id).join(",") === shippedSup.components.map((c) => c.id).join(","),
+    afterReset.components.map((c) => c.id).join(","),
+  );
+  check(
+    "merge RESET matches shipped supplyRisk field-by-field including order",
+    afterReset.components.length === shippedSup.components.length &&
+      afterReset.components.every((c, i) => componentsFieldEqual(c, shippedSup.components[i])),
+  );
+}
+
 // Q. Numeric literals (Stage I): a literal is part of the formula STRING, so a formula that adds
 //    one moves the fingerprint through the existing projection (projectComponentFormula hashes the
 //    formula verbatim); referencedVariables skips it (only identifiers are variables), so no
