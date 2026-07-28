@@ -356,5 +356,17 @@ check(
   compositeAtDefaults(shipped, RISK_MODEL_DEFAULTS) && !compositeAtDefaults(mutated, RISK_MODEL_DEFAULTS),
 );
 
+// Q. Numeric literals (Stage I): a literal is part of the formula STRING, so a formula that adds
+//    one moves the fingerprint through the existing projection (projectComponentFormula hashes the
+//    formula verbatim); referencedVariables skips it (only identifiers are variables), so no
+//    phantom variable enters the projection.
+check(
+  "referencedVariables skips numeric literals",
+  eq(referencedVariables("0.5 * country_distance + 0.5 * import_friction"), ["country_distance", "import_friction"]),
+);
+const mLiteral = clone(RISK_MODEL);
+component(mLiteral, "supplyRisk", "cost_premium").formula = "0.5 * cost_premium";
+check("a numeric-literal formula edit moves the fingerprint", cfp(mLiteral) !== base);
+
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

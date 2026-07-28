@@ -23,6 +23,24 @@ import type { PreviewData } from "@/lib/preview-types";
 
 const FUNCS = ["min", "max", "abs", "sqrt"] as const;
 
+// A decimal numeric literal (integer / decimal / scientific, optional leading minus). The
+// backend evaluator already accepts number literals (python/formula_eval — ast.Constant); this
+// is only the UI's gate on what the "Insert number" action may add.
+const LITERAL_RE = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+// Classify what the formula expects NEXT from its last space-separated token (append() inserts a
+// space between tokens, so the last token is unambiguous): a VALUE when the formula is empty, or
+// the last token is an operator, or it ends with '(' (a bare '(' or a 'fn(' call); otherwise an
+// OPERATOR is expected (the last token is a variable, a number, or ')'). Insertion is gated on
+// this so an invalid sequence — value directly after value, a leading or doubled operator — cannot
+// be built; the TS side has no formula parser, so this construction-time gate is the guard.
+function expectsValue(formula: string): boolean {
+  const last = formula.trim().split(/\s+/).pop() ?? "";
+  if (!last) return true;
+  if (["+", "-", "*", "/"].includes(last)) return true;
+  return last.endsWith("(");
+}
+
 /**
  * Stage F formula editor — an OVERLAY card (not inline). Pick a sheet → its variables appear →
  * click a variable/operator to append to the formula. Bounds guarantee 0-100 by construction.
@@ -57,6 +75,7 @@ export function FormulaEditorCard({
   onClose: () => void;
 }) {
   const [formula, setFormula] = useState(initialFormula);
+  const [literal, setLiteral] = useState("");
   const [loStr, setLoStr] = useState(String(initialBounds.lo));
   const [hiStr, setHiStr] = useState(String(initialBounds.hi));
   const [activeSheet, setActiveSheet] = useState<string | null>(null);
@@ -77,9 +96,14 @@ export function FormulaEditorCard({
   const sheetNames = Object.keys(sheets);
   const currentSheet = activeSheet ?? sheetNames[0] ?? "";
 
-  const endsWithOperator = (FORMULA_OPERATORS as readonly string[]).includes(formula.trim().slice(-1));
   const append = (t: string) => setFormula((f) => (f.trim() ? `${f.trim()} ` : "") + t);
   const backspace = () => setFormula((f) => f.trim().split(/\s+/).slice(0, -1).join(" "));
+  // Token-sequence gates (see expectsValue): a VALUE (variable, number literal, '(', function) is
+  // insertable only when a value is expected; an OPERATOR only when one is not; ')' only when an
+  // expression is open (unmatched '('); the number literal additionally needs to be well-formed.
+  const wantsValue = expectsValue(formula);
+  const parenDepth = (formula.match(/\(/g)?.length ?? 0) - (formula.match(/\)/g)?.length ?? 0);
+  const literalValid = LITERAL_RE.test(literal.trim());
 
   // The candidate composite = the current draft composite with THIS component's edited
   // formula/bounds/weight applied — what preview.py scores + measures impact against.
@@ -156,19 +180,39 @@ export function FormulaEditorCard({
               size="sm"
               variant="outline"
               className="w-9 font-mono"
-              disabled={!formula.trim() || endsWithOperator}
+              disabled={wantsValue}
               onClick={() => append(op)}
             >
               {op}
             </Button>
           ))}
-          {["(", ")"].map((p) => (
-            <Button key={p} size="sm" variant="outline" className="w-9 font-mono" onClick={() => append(p)}>
-              {p}
-            </Button>
-          ))}
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-9 font-mono"
+            disabled={!wantsValue}
+            onClick={() => append("(")}
+          >
+            (
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-9 font-mono"
+            disabled={wantsValue || parenDepth <= 0}
+            onClick={() => append(")")}
+          >
+            )
+          </Button>
           {FUNCS.map((fn) => (
-            <Button key={fn} size="sm" variant="ghost" className="font-mono text-xs" onClick={() => append(`${fn}(`)}>
+            <Button
+              key={fn}
+              size="sm"
+              variant="ghost"
+              className="font-mono text-xs"
+              disabled={!wantsValue}
+              onClick={() => append(`${fn}(`)}
+            >
               {fn}()
             </Button>
           ))}
@@ -177,6 +221,33 @@ export function FormulaEditorCard({
           </Button>
           <Button size="sm" variant="ghost" onClick={() => setFormula("")} disabled={!formula.trim()}>
             Clear
+          </Button>
+        </div>
+
+        {/* Number literal (Stage I): a value like `0.5`, so a weighted blend such as
+            `0.5 * country_distance + 0.5 * import_friction` is composable. Insertable only when a
+            value is expected (same token-sequence rule as a variable) and only when well-formed. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Number</span>
+          <Input
+            value={literal}
+            inputMode="decimal"
+            placeholder="e.g. 0.5"
+            onChange={(e) => setLiteral(e.target.value)}
+            aria-label="Number literal"
+            aria-invalid={literal.trim() !== "" && !literalValid}
+            className="w-28 text-right font-mono text-sm"
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={!wantsValue || !literalValid}
+            onClick={() => {
+              append(literal.trim());
+              setLiteral("");
+            }}
+          >
+            Insert number
           </Button>
         </div>
 
@@ -200,16 +271,18 @@ export function FormulaEditorCard({
           {(sheets[currentSheet] ?? []).map(([id, v]) => {
             const blocked = builtinInputBlockedIn(v, compositeId, composites);
             const reason = v.locked ? `locked: ${v.locked}` : blocked ? `blocked — feeds ${blocked.feedsBuiltin}` : null;
-            const disabled = !!reason;
+            // A variable is a VALUE, so it is only insertable when a value is expected (same
+            // token-sequence rule as the number literal) — this also stops "variable variable".
+            const btnDisabled = !!reason || !wantsValue;
             return (
               <button
                 key={id}
                 type="button"
-                disabled={disabled}
+                disabled={btnDisabled}
                 onClick={() => append(id)}
                 className={cn(
                   "flex flex-col items-start rounded-md border px-2 py-1 text-left text-xs",
-                  disabled ? "cursor-not-allowed opacity-60" : "hover:bg-muted/50",
+                  btnDisabled ? "cursor-not-allowed opacity-60" : "hover:bg-muted/50",
                 )}
               >
                 <span className="flex w-full items-center justify-between gap-2">
