@@ -26,6 +26,9 @@ import type {
  * FALLBACK IS THE DEFAULT. A missing GEMINI_API_KEY, an API error, a rate-limit, or a
  * timeout all return { available: false } — the caller renders the template narrative
  * and a visible note. The app is fully functional with no key (the handover condition).
+ * Every FAILURE (everything but a deliberately-absent key) is logged to the SERVER
+ * CONSOLE first — class, message, and status, with the key scrubbed — so the route's
+ * 200-and-degrade design cannot hide the cause. Nothing is ever surfaced to the client.
  *
  * MODEL IS CONFIG, NOT CODE (GEMINI_REPORT_MODEL) with a gemini-2.5-flash default, so the
  * organisation can raise the tier later without a code change — the same
@@ -187,6 +190,41 @@ function classifyError(err: unknown): BriefNarrativeUnavailableReason {
   return "error";
 }
 
+/** Redact the API key from any string before it reaches the server console. Google auth
+ *  errors do not echo the key, but a failing request could carry a URL that does — so
+ *  scrub the full value (and a leading chunk, as insurance). */
+function scrubKey(text: string, apiKey: string): string {
+  if (!apiKey) return text;
+  let out = text.split(apiKey).join("[REDACTED_KEY]");
+  if (apiKey.length >= 16) out = out.split(apiKey.slice(0, 16)).join("[REDACTED_KEY]");
+  return out;
+}
+
+/** Print a legible diagnostic to the SERVER CONSOLE *before* the route degrades to the
+ *  template. Without it a provider failure (bad key, wrong credential type, quota,
+ *  network, timeout) is swallowed by the 200-and-degrade design and invisible in the
+ *  logs. SERVER ONLY — never returned to the client; the key is scrubbed from the
+ *  message so it can never leak into a log. */
+function logGenerationFailure(err: unknown, model: string, apiKey: string): void {
+  const name = (err as { name?: unknown } | null)?.name;
+  const cls =
+    err instanceof ApiError
+      ? "ApiError"
+      : typeof name === "string" && name
+        ? name
+        : typeof err;
+  const statusVal = (err as { status?: unknown } | null)?.status;
+  const status = typeof statusVal === "number" ? statusVal : undefined;
+  const rawMessage =
+    err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+  console.error(
+    "[report-llm] Gemini narrative generation failed — degrading to template. " +
+      `model=${model} class=${cls}` +
+      (status !== undefined ? ` status=${status}` : "") +
+      `: ${scrubKey(rawMessage, apiKey)}`,
+  );
+}
+
 export async function generateSupplierBriefNarrative(
   args: GenerateArgs,
 ): Promise<BriefNarrativeResult> {
@@ -254,21 +292,44 @@ export async function generateSupplierBriefNarrative(
     });
 
     const raw = res.text?.trim() ?? "";
-    if (!raw) return { available: false, reason: "empty" };
+    if (!raw) {
+      // A 200 with empty text usually means a safety/finish block — surface which one,
+      // so this degrade is not silent either.
+      const finish = res.candidates?.[0]?.finishReason;
+      const block = res.promptFeedback?.blockReason;
+      console.warn(
+        "[report-llm] Gemini returned no usable text — degrading to template. " +
+          `model=${model}` +
+          (finish ? ` finishReason=${finish}` : "") +
+          (block ? ` blockReason=${block}` : ""),
+      );
+      return { available: false, reason: "empty" };
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
     } catch {
+      console.warn(
+        "[report-llm] Gemini response was not valid JSON — degrading to template. " +
+          `model=${model} length=${raw.length}`,
+      );
       return { available: false, reason: "empty" };
     }
     const prose = coerceProse(parsed, draftProse);
-    if (!prose) return { available: false, reason: "empty" };
+    if (!prose) {
+      console.warn(
+        "[report-llm] Gemini response JSON missing required prose fields — degrading to template. " +
+          `model=${model}`,
+      );
+      return { available: false, reason: "empty" };
+    }
     const usage = {
       inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
       outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,
     };
     return { available: true, prose, model, inputsHash, usage };
   } catch (err) {
+    logGenerationFailure(err, model, apiKey);
     return { available: false, reason: classifyError(err) };
   }
 }
