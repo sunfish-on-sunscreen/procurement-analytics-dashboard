@@ -40,6 +40,10 @@ import {
   type RiskComposite,
   type RiskComponent,
 } from "@/lib/risk-model";
+import { readFileSync } from "node:fs";
+// The REAL token-gating helpers from the component — imported, NOT copied, so a source change to
+// either breaks this gate (the two-implementations problem: a copied helper tests the copy).
+import { expectsValue, LITERAL_RE } from "@/components/Methodology/FormulaEditorCard";
 
 // The pinned P baseline (schema 2.2.0). Deliberate config changes update these — same discipline
 // as the harness md5 — but a drift with no intended change is a bug this catches.
@@ -408,6 +412,59 @@ check(
 const mLiteral = clone(RISK_MODEL);
 component(mLiteral, "supplyRisk", "cost_premium").formula = "0.5 * cost_premium";
 check("a numeric-literal formula edit moves the fingerprint", cfp(mLiteral) !== base);
+
+// R. FormulaEditorCard token-gating — the adjacent-values guard. Uses the REAL imported
+//    expectsValue + LITERAL_RE (a source change breaks this), applies the SAME disabled expressions
+//    the JSX uses, and then cross-checks the source still wires those attrs to them (the logic test
+//    can't see the wiring; the source check can't run the logic — together they cover both).
+function fecStates(formula: string, literal = "", reason: string | null = null) {
+  const wantsValue = expectsValue(formula);
+  const depth = (formula.match(/\(/g)?.length ?? 0) - (formula.match(/\)/g)?.length ?? 0);
+  return {
+    operatorDisabled: wantsValue,
+    literalInsertDisabled: !wantsValue || !LITERAL_RE.test(literal.trim()),
+    variableDisabled: !!reason || !wantsValue,
+    closeParenDisabled: wantsValue || depth <= 0,
+  };
+}
+check(
+  "FEC after a value: operators enabled, variables + number DISABLED (no adjacent value)",
+  fecStates("cost_premium", "5").operatorDisabled === false &&
+    fecStates("cost_premium", "5").variableDisabled === true &&
+    fecStates("cost_premium", "5").literalInsertDisabled === true,
+);
+check(
+  "FEC after an operator: operators DISABLED, values enabled",
+  fecStates("cost_premium +", "5").operatorDisabled === true &&
+    fecStates("cost_premium +", "5").variableDisabled === false &&
+    fecStates("cost_premium +", "5").literalInsertDisabled === false,
+);
+check("FEC empty: no leading operator", fecStates("").operatorDisabled === true && fecStates("").variableDisabled === false);
+check(
+  "FEC ')' only with an open expression + preceding value",
+  fecStates("min(").closeParenDisabled === true &&
+    fecStates("min( cost_premium").closeParenDisabled === false &&
+    fecStates("cost_premium").closeParenDisabled === true,
+);
+check("FEC blocked variable stays disabled", fecStates("cost_premium +", "", "blocked — feeds delivery_score").variableDisabled === true);
+check(
+  "FEC LITERAL_RE accepts decimals, rejects junk",
+  ["0.5", "-5", "1e3", "12", ".5"].every((l) => LITERAL_RE.test(l)) &&
+    !["5abc", "", ".", "1.2.3"].some((l) => LITERAL_RE.test(l)),
+);
+// Source cross-check: the JSX still wires each disabled attr to wantsValue / parenDepth /
+// literalValid (all derived from the imported expectsValue). If a button is rewired, this fails.
+const fecSrc = readFileSync(new URL("../components/Methodology/FormulaEditorCard.tsx", import.meta.url), "utf-8");
+for (const expr of [
+  "const wantsValue = expectsValue(formula)",
+  "disabled={wantsValue}", // operators
+  "disabled={!wantsValue}", // '(' + functions
+  "disabled={wantsValue || parenDepth <= 0}", // ')'
+  "disabled={!wantsValue || !literalValid}", // number insert
+  "!!reason || !wantsValue", // variable button
+]) {
+  check(`FEC source wires the disabled state: ${expr}`, fecSrc.includes(expr));
+}
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

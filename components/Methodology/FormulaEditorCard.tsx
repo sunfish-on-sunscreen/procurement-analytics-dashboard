@@ -25,16 +25,18 @@ const FUNCS = ["min", "max", "abs", "sqrt"] as const;
 
 // A decimal numeric literal (integer / decimal / scientific, optional leading minus). The
 // backend evaluator already accepts number literals (python/formula_eval — ast.Constant); this
-// is only the UI's gate on what the "Insert number" action may add.
-const LITERAL_RE = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+// is only the UI's gate on what the "Insert number" action may add. EXPORTED so the token-gating
+// gate (scripts/fingerprint_check.ts) tests THIS regex, not a copy of it.
+export const LITERAL_RE = /^-?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 // Classify what the formula expects NEXT from its last space-separated token (append() inserts a
 // space between tokens, so the last token is unambiguous): a VALUE when the formula is empty, or
 // the last token is an operator, or it ends with '(' (a bare '(' or a 'fn(' call); otherwise an
 // OPERATOR is expected (the last token is a variable, a number, or ')'). Insertion is gated on
 // this so an invalid sequence — value directly after value, a leading or doubled operator — cannot
-// be built; the TS side has no formula parser, so this construction-time gate is the guard.
-function expectsValue(formula: string): boolean {
+// be built; the TS side has no formula parser, so this construction-time gate is the guard. EXPORTED
+// so the gate tests THIS function, not a copy (the adjacent-values bug lived in exactly this logic).
+export function expectsValue(formula: string): boolean {
   const last = formula.trim().split(/\s+/).pop() ?? "";
   if (!last) return true;
   if (["+", "-", "*", "/"].includes(last)) return true;
