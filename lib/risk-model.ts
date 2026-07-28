@@ -517,14 +517,24 @@ export function nextVersion(current: string): string {
 /** A minimal per-composite edit payload (id + component enabled/weight). */
 export interface CompositeEdit {
   id: string;
-  components: { id: string; enabled: boolean; weight: number }[];
+  components: {
+    id: string;
+    enabled: boolean;
+    weight: number;
+    /** Stage F: formula-defined components only. Ignored on builtin sub-scores (the server
+     * never applies a formula/bounds edit to a builtin — its formula is a scores.py column). */
+    formula?: string;
+    bounds?: FormulaBounds;
+  }[];
 }
 
 /**
- * Merge weight/enabled edits into the current config and bump the version of ONLY the
- * composites whose own components actually changed — saving one composite must never
- * bump another. Returns the merged model + the ids that changed. Pure; the route does
- * the file write + recompute. schemaVersion and all display fields are preserved.
+ * Merge weight/enabled (+ Stage F: formula/bounds on non-builtin components) edits into the
+ * current config and bump the version of ONLY the composites whose own components actually
+ * changed — saving one composite must never bump another. Returns the merged model + the ids
+ * that changed. Pure; the route does the file write + recompute. schemaVersion and all display
+ * fields are preserved. A formula/bounds edit on a BUILTIN component is ignored (its formula is
+ * a scores.py column, not editable — the UI never offers it and the route rejects it upstream).
  */
 export function mergeAndBumpVersions(
   current: RiskModel,
@@ -541,14 +551,80 @@ export function mergeAndBumpVersions(
     const components = composite.components.map((comp) => {
       const e = compEdits.get(comp.id);
       if (!e) return comp;
+      const next: RiskComponent = { ...comp, enabled: e.enabled, weight: e.weight };
       if (e.enabled !== comp.enabled || e.weight !== comp.weight) changed = true;
-      return { ...comp, enabled: e.enabled, weight: e.weight };
+      // Formula + bounds are editable ONLY on formula-defined (non-builtin) components.
+      if (!comp.builtin) {
+        if (e.formula !== undefined && e.formula !== comp.formula) {
+          next.formula = e.formula;
+          changed = true;
+        }
+        if (
+          e.bounds !== undefined &&
+          (e.bounds.lo !== comp.bounds?.lo || e.bounds.hi !== comp.bounds?.hi)
+        ) {
+          next.bounds = { lo: e.bounds.lo, hi: e.bounds.hi };
+          changed = true;
+        }
+      }
+      return next;
     });
     if (!changed) return { ...composite, components };
     changedIds.push(composite.id);
     return { ...composite, components, version: nextVersion(composite.version) };
   });
   return { merged: { ...current, composites }, changedIds };
+}
+
+/** The whitelisted formula operators, for the UI operator buttons + the "ends in an operator"
+ * validation (a trailing binary operator is an incomplete formula). */
+export const FORMULA_OPERATORS = ["+", "-", "*", "/"] as const;
+
+/**
+ * Non-throwing validation of a candidate FORMULA for a component in a given composite (Stage F)
+ * — used by BOTH the editor (inline error, block save) and the save route (400). Enforces:
+ * non-empty; does not end in a binary operator; references only catalogue variables; and none
+ * of those variables is BLOCKED in this composite by the double-count rule (builtinInputBlockedIn).
+ * Bounds are validated separately (boundsError). Returns a message, or null when valid.
+ */
+export function formulaError(
+  formula: string,
+  compositeId: string,
+  composites: RiskComposite[],
+  variables: CatalogueVariables,
+  enforceBlock = true,
+): string | null {
+  const trimmed = (formula ?? "").trim();
+  if (!trimmed) return "The formula is empty.";
+  if (FORMULA_OPERATORS.includes(trimmed.slice(-1) as (typeof FORMULA_OPERATORS)[number])) {
+    return "The formula ends in an operator.";
+  }
+  let refs: string[];
+  try {
+    refs = referencedVariables(trimmed);
+  } catch {
+    return "The formula could not be parsed.";
+  }
+  for (const id of refs) {
+    const v = variables[id];
+    if (!v) return `Unknown variable "${id}".`;
+    // The double-count block mirrors Python: enforced on ENABLED components only (a disabled
+    // component reaches no score). The route passes enforceBlock = component.enabled.
+    if (enforceBlock) {
+      const blocked = builtinInputBlockedIn(v, compositeId, composites);
+      if (blocked) {
+        return `"${id}" feeds ${blocked.feedsBuiltin} and is blocked here — it would enter the composite twice.`;
+      }
+    }
+  }
+  return null;
+}
+
+/** Non-throwing bounds validation (Stage F): both finite, hi > lo. Returns a message or null. */
+export function boundsError(bounds: FormulaBounds): string | null {
+  if (!Number.isFinite(bounds.lo) || !Number.isFinite(bounds.hi)) return "Bounds must be numbers.";
+  if (bounds.hi <= bounds.lo) return "The upper bound must be greater than the lower bound.";
+  return null;
 }
 
 /** A per-table edit payload: the table id + its full editable content (default + rows). */

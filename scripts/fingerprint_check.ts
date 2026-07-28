@@ -27,6 +27,9 @@ import {
   referencedVariables,
   componentTableRefs,
   builtinInputBlockedIn,
+  mergeAndBumpVersions,
+  formulaError,
+  boundsError,
   type RiskModel,
   type RiskComposite,
   type RiskComponent,
@@ -191,6 +194,33 @@ check("non-builtin variable ALLOWED in performanceRisk",
   builtinInputBlockedIn(vars.cycle_time, "performanceRisk", RISK_MODEL.composites) === null);
 check("risk_score-input variable ALLOWED in performanceRisk (its own output)",
   builtinInputBlockedIn(vars.roster_concentration, "performanceRisk", RISK_MODEL.composites) === null);
+
+// M. Stage F formula-save backend: mergeAndBumpVersions applies a formula edit + bumps the
+//    version + moves the fingerprint, ignores a formula on a BUILTIN, and formulaError/boundsError
+//    catch invalid input.
+const fEdit = mergeAndBumpVersions(RISK_MODEL, [
+  { id: "supplyRisk", components: [{ id: "cost_premium", enabled: true, weight: 0.25, formula: "cost_premium + import_friction" }] },
+]);
+const srAfter = fEdit.merged.composites.find((c) => c.id === "supplyRisk")!;
+check("mergeAndBumpVersions applies a formula edit",
+  srAfter.components.find((c) => c.id === "cost_premium")!.formula === "cost_premium + import_friction");
+check("...bumps the composite version + moves the fingerprint",
+  fEdit.changedIds.includes("supplyRisk") && cfp(fEdit.merged) !== base);
+const builtinEdit = mergeAndBumpVersions(RISK_MODEL, [
+  { id: "performanceComposite", components: [{ id: "quality_score", enabled: true, weight: 0.3, formula: "on_time_rate" }] },
+]);
+check("mergeAndBumpVersions IGNORES a formula edit on a builtin component",
+  builtinEdit.merged.composites.find((c) => c.id === "performanceComposite")!
+    .components.find((c) => c.id === "quality_score")!.formula === undefined);
+check("formulaError flags a blocked variable in performanceRisk",
+  formulaError("country_distance + on_time_rate", "performanceRisk", RISK_MODEL.composites, vars) !== null);
+check("formulaError passes a valid performanceRisk formula",
+  formulaError("country_distance + roster_concentration", "performanceRisk", RISK_MODEL.composites, vars) === null);
+check("formulaError flags a trailing operator",
+  formulaError("country_distance +", "performanceRisk", RISK_MODEL.composites, vars) !== null);
+check("formulaError flags an unknown variable",
+  formulaError("country_distance + nope", "performanceRisk", RISK_MODEL.composites, vars) !== null);
+check("boundsError flags hi <= lo", boundsError({ lo: 100, hi: 0 }) !== null && boundsError({ lo: 0, hi: 100 }) === null);
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

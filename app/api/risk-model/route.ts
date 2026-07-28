@@ -10,6 +10,8 @@ import {
   mergeAndBumpTableVersions,
   normalizeLookupTableEdit,
   lookupTableError,
+  formulaError,
+  boundsError,
   buildConfigStamp,
 } from "@/lib/risk-model";
 import { readRiskModel, writeRiskModel } from "@/lib/risk-model-server";
@@ -33,6 +35,10 @@ const Body = z
                 id: z.string(),
                 enabled: z.boolean(),
                 weight: z.number().finite().min(0).max(1),
+                // Stage F: formula-defined components only (the server rejects a formula/bounds
+                // edit aimed at a builtin sub-score below).
+                formula: z.string().optional(),
+                bounds: z.object({ lo: z.number().finite(), hi: z.number().finite() }).optional(),
               }),
             )
             .min(1),
@@ -126,6 +132,36 @@ export async function POST(request: Request) {
         { error: err instanceof Error ? err.message : "Invalid risk model" },
         { status: 400 },
       );
+    }
+  }
+
+  // Stage F: reject a formula/bounds edit aimed at a BUILTIN sub-score (its formula is a
+  // scores.py column, not editable), then validate every formula-defined component's formula +
+  // bounds so a bad formula is a 400 BEFORE the config is written (never a broken recompute).
+  const builtinRefs = new Set<string>();
+  for (const c of merged.composites) {
+    for (const comp of c.components) if (comp.builtin) builtinRefs.add(`${c.id}.${comp.id}`);
+  }
+  for (const ce of parsed.data.composites ?? []) {
+    for (const comp of ce.components) {
+      if ((comp.formula !== undefined || comp.bounds !== undefined) && builtinRefs.has(`${ce.id}.${comp.id}`)) {
+        return NextResponse.json(
+          { error: `${ce.id}.${comp.id} is a built-in sub-score — its formula is not editable.` },
+          { status: 400 },
+        );
+      }
+    }
+  }
+  const catalogueVars = merged.variables ?? {};
+  for (const composite of merged.composites) {
+    for (const comp of composite.components) {
+      if (comp.builtin || comp.formula === undefined) continue;
+      const fe = formulaError(comp.formula, composite.id, merged.composites, catalogueVars, comp.enabled);
+      if (fe) return NextResponse.json({ error: `${composite.id}.${comp.id}: ${fe}` }, { status: 400 });
+      if (comp.bounds !== undefined) {
+        const be = boundsError(comp.bounds);
+        if (be) return NextResponse.json({ error: `${composite.id}.${comp.id}: ${be}` }, { status: 400 });
+      }
     }
   }
 
