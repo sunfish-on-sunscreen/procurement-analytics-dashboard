@@ -118,6 +118,24 @@ def evaluate_formula(formula, env):
     return float(result)
 
 
+def referenced_names(formula):
+    """The variable names a formula references (ast.Name ids that are NOT a call target), so
+    the caller can build env with exactly the variables the formula needs. Raises FormulaError
+    on a malformed formula (same parse guard as evaluate_formula)."""
+    if formula is None or not str(formula).strip():
+        raise FormulaError("empty formula")
+    try:
+        tree = ast.parse(str(formula), mode="eval")
+    except SyntaxError as exc:
+        raise FormulaError(f"syntax error: {exc.msg}") from exc
+    call_funcs = {
+        n.func.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    }
+    return {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} - call_funcs
+
+
 def normalize_to_bounds(value, lo, hi):
     """Map a formula result on [lo, hi] to [0, 100], clamped — so component output is 0-100
     BY CONSTRUCTION. Written as (value - lo) * (100 / (hi - lo)) so the DEFAULT (0, 100)

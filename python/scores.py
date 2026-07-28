@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 import risk_config  # config/risk-model.json weights: performanceRisk + performanceComposite
+import formula_eval  # the whitelisted formula evaluator (Stage D)
 
 # Composite weights now live in config/risk-model.json (the `performanceComposite`
 # composite). This module-level dict is DERIVED from that config so the offline
@@ -188,22 +189,28 @@ def compute_scores(m: pd.DataFrame, roster_cat_counts: dict) -> pd.DataFrame:
     # enabled and 0.6 + 0.4 == 1.0, resolve_effective_weights divides by exactly 1.0 (a
     # bit-for-bit no-op), so this reproduces 100 - (0.6*country + 0.4*concentration).
     _cfg = risk_config.get_composite("performanceRisk")
-    _w = risk_config.resolve_effective_weights(_cfg)  # THE shared renorm; guards all-disabled
-    _invert = risk_config.invert_polarity(_cfg)
+    # The variables the enabled formulas reference (single-atom today): country_distance keys on
+    # the supplier country, roster_concentration on the roster other-in-category count — both via
+    # their lookup tables. Byte-identical to the old 100 - (0.6*country + 0.4*concentration):
+    # single-atom formulas + (0,100) bounds make normalize_to_bounds a x1.0 identity,
+    # evaluate_composite sums in declared component order, and combine_score applies
+    # invertPolarity=true (the 100-minus).
+    _referenced = set()
+    for _comp in _cfg["components"]:
+        if _comp.get("enabled", True):
+            _referenced |= formula_eval.referenced_names(_comp["formula"])
     new_risk = []
     for _, r in m.iterrows():
-        country = country_distance_score(r.get("country", ""))
-        # Roster-based concentration (same signal Kraljic uses): count OTHER
-        # suppliers in the same category across the FULL roster; single-source
-        # (0 others) -> 100.
         cat = str(r.get("category", ""))
-        other_in_category = max(0, int(roster_cat_counts.get(cat, 1)) - 1)
-        concentration = concentration_0_100(other_in_category)
-        penalty = (
-            _w.get("country_distance", 0.0) * country
-            + _w.get("roster_concentration", 0.0) * concentration
-        )
-        new_risk.append(float(risk_config.combine_score(penalty, _invert)))
+        other = max(0, int(roster_cat_counts.get(cat, 1)) - 1)
+        key_values = {
+            "supplier_id": r.get("supplier_id", ""),
+            "country": r.get("country", ""),
+            "roster_other_count": other,
+        }
+        env = risk_config.resolve_env(_referenced, key_values, {})
+        score, _contrib = risk_config.evaluate_composite(_cfg, env)
+        new_risk.append(score)
     m["risk_score"] = np.round(new_risk, 2)
     # Composite weights + polarity come from config (performanceComposite), through the
     # SAME shared resolve_effective_weights + combine_score the risk composites use — no

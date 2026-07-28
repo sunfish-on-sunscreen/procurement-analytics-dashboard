@@ -162,6 +162,55 @@ def test_formula_evaluator():
         pass
 
 
+def test_evaluate_composite_order():
+    # GUARD 2: evaluate_composite must iterate components in DECLARED config order, because float
+    # addition is not associative and a reorder would drift the md5 with no obvious cause. The
+    # contributions dict preserves insertion order, so it witnesses the iteration order — a
+    # future refactor to a dict comprehension / sorted / set would flip it and fail here.
+    composite = {
+        "id": "t", "invertPolarity": False,
+        "components": [
+            {"id": "zeta", "formula": "zeta", "bounds": {"lo": 0, "hi": 100}, "enabled": True, "weight": 0.5},
+            {"id": "alpha", "formula": "alpha", "bounds": {"lo": 0, "hi": 100}, "enabled": True, "weight": 0.5},
+        ],
+    }
+    score, contributions = risk_config.evaluate_composite(composite, {"zeta": 40.0, "alpha": 60.0})
+    assert list(contributions.keys()) == ["zeta", "alpha"], list(contributions.keys())
+    assert abs(score - 50.0) < 1e-9, score
+
+
+def test_variable_validation():
+    import copy
+    base = risk_config.load_risk_model()
+    risk_config.validate_variables(base)  # the shipped config is valid
+
+    def rejects(mutate, needle):
+        m = copy.deepcopy(base)
+        mutate(m)
+        try:
+            risk_config.validate_variables(m)
+            assert False, f"expected ValueError ({needle})"
+        except ValueError as e:
+            assert needle in str(e), (needle, str(e))
+
+    # a variable id may not shadow a reserved function name
+    rejects(lambda m: m["variables"].__setitem__("max", {"kind": "computed", "default": 0.0}), "reserved")
+    # the concentration one-signal invariant: the two must share (table, key)
+    rejects(lambda m: m["variables"]["roster_concentration"].__setitem__("table", "country_distance"), "SAME")
+    # a formula may only reference known variables
+    def break_ref(m):
+        for c in m["composites"]:
+            if c["id"] == "supplyRisk":
+                c["components"][0]["formula"] = "nonexistent_var"
+    rejects(break_ref, "unknown variable")
+    # a component's lookupTable must match its formula's lookup-variable table
+    def break_lt(m):
+        for c in m["composites"]:
+            if c["id"] == "supplyRisk":
+                c["components"][0]["lookupTable"] = "import_friction"
+    rejects(break_lt, "lookupTable")
+
+
 def test_lookup_table_validation():
     # The default config's three tables are valid (load_risk_model already validated
     # them, but re-assert directly).

@@ -42,6 +42,7 @@ from scipy.stats import mannwhitneyu, norm
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import scores  # shared score engine (single source of truth for the 6 formulas)
 import risk_config  # config/risk-model.json weights for the two risk composites
+import formula_eval  # the whitelisted formula evaluator (Stage D)
 
 
 def log(msg):
@@ -1256,63 +1257,41 @@ def compute_supply_risk(purchases, suppliers, metrics):
     # supply_risk_score. All three scale factors (0.5, 0.25, x2, /4) are powers of two,
     # so the round-trip is exact — no float drift.
     _cfg = risk_config.get_composite("supplyRisk")
-    _w = risk_config.resolve_effective_weights(_cfg)  # THE shared renorm; guards all-disabled
 
-    # 1. supply concentration: normalized roster step curve {0:100,1:70,2:44,3:24,4:10,
-    #    >=5:0} via scores.concentration_0_100, which now reads the SHARED
-    #    `concentration_curve` lookup table in config (the SAME table performanceRisk's
-    #    roster_concentration reads), weighted. Merges single-source status + competition
-    #    into one roster-derived measure: 0 other (true single source) -> 100*0.50 = 50,
-    #    ..., >=5 -> 0.
-    conc_norm = df["other_in_category"].map(lambda o: scores.concentration_0_100(int(o))).astype(float)
-    c_conc = _w.get("supply_concentration", 0.0) * conc_norm
-    # 2. cost premium: normalized clip(premium*250,0,100), period-scoped, benchmarked vs
-    #    item spend-weighted avg at LINE grain (lock C) — the PO-grain EnrichedPurchase
-    #    view carries no per-item price, so read the window's PoLine frame scoped to the
-    #    POs in THIS call's `purchases` subset. Falls back to the PO-grain frame only if
-    #    the line frame was never loaded (e.g. a direct unit-test call).
+    # Resolver input for the `cost_premium` COMPUTED variable: its map is period-scoped at LINE
+    # grain (lock C) — the PO-grain EnrichedPurchase view carries no per-item price, so read the
+    # window's PoLine frame scoped to the POs in THIS call's `purchases` subset; fall back to the
+    # PO-grain frame only if the line frame was never loaded (e.g. a direct unit-test call).
     if _PO_LINES is not None and "poId" in purchases.columns:
         po_ids = set(purchases["poId"].tolist())
         cost_input = _PO_LINES[_PO_LINES["poId"].isin(po_ids)]
     else:
         cost_input = purchases
-    prem_map = _cost_premium_points(cost_input)
-    prem_norm = df["supplierExternalId"].map(prem_map).fillna(0.0).astype(float)
-    c_premium = _w.get("cost_premium", 0.0) * prem_norm
-    # 3. import friction: normalized {0,32,64,100} Indonesia trade-agreement coverage
-    #    (config lookupTables.import_friction, via _import_friction_points), weighted.
-    fric_norm = df["country"].apply(_import_friction_points).astype(float)
-    c_friction = _w.get("import_friction", 0.0) * fric_norm
+    computed_maps = {"cost_premium": _cost_premium_points(cost_input)}
 
-    # combine_score = THE shared polarity/clip fold. supplyRisk invertPolarity=false, so
-    # this is clip(sum, 0, 100) — a no-op since the weighted contributions still max at 100.
-    risk = risk_config.combine_score(
-        c_conc.values + c_premium.values + c_friction.values,
-        risk_config.invert_polarity(_cfg),
-    )
+    # The variables the composite's enabled formulas reference (single-atom today: each formula
+    # is its component's own variable id). supply_concentration / import_friction resolve via
+    # their lookup tables on the supplier's key field; cost_premium via the computed map above.
+    referenced = set()
+    for comp in _cfg["components"]:
+        if comp.get("enabled", True):
+            referenced |= formula_eval.referenced_names(comp["formula"])
 
-    risk_map = {sid: float(r) for sid, r in zip(df["supplierExternalId"], risk)}
-    competition_map = {
-        sid: int(o) for sid, o in zip(df["supplierExternalId"], df["other_in_category"])
-    }
-    # Per-supplier breakdown of the three WEIGHTED contributions (weight * normalized,
-    # unrounded) — numerically the old points (concentration 0-50, cost_premium 0-25,
-    # import_friction 0-25). The supply-risk score is exactly their sum — the clip above
-    # is a no-op since the contributions still max at 50 + 25 + 25 = 100 — so a 2dp
-    # display total reconciles with the 2dp component bars (see kraljic_analysis's emit).
-    components_map = {
-        sid: {
-            "supply_concentration": float(cc),
-            "cost_premium": float(cp),
-            "import_friction": float(cf),
-        }
-        for sid, cc, cp, cf in zip(
-            df["supplierExternalId"],
-            c_conc.values,
-            c_premium.values,
-            c_friction.values,
-        )
-    }
+    # Evaluate the supplyRisk composite per supplier through THE formula evaluator (env resolved
+    # outside it). Byte-identical to the old vectorized weight*normalized sum: single-atom
+    # formulas + (0,100) bounds make normalize_to_bounds a x1.0 identity, and evaluate_composite
+    # sums the weighted contributions in declared component order (concentration 0-50, cost 0-25,
+    # friction 0-25), so a 2dp display total still reconciles with the 2dp component bars.
+    risk_map, competition_map, components_map = {}, {}, {}
+    for _, r in df.iterrows():
+        sid = r["supplierExternalId"]
+        other = int(r["other_in_category"])
+        key_values = {"supplier_id": sid, "country": r["country"], "roster_other_count": other}
+        env = risk_config.resolve_env(referenced, key_values, computed_maps)
+        score, contributions = risk_config.evaluate_composite(_cfg, env)
+        risk_map[sid] = score
+        competition_map[sid] = other
+        components_map[sid] = {k: float(v) for k, v in contributions.items()}
     return risk_map, competition_map, components_map
 
 

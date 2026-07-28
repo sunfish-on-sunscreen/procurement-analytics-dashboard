@@ -17,6 +17,8 @@ import os
 
 import numpy as np
 
+import formula_eval
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CONFIG_PATH = os.path.normpath(os.path.join(_HERE, "..", "config", "risk-model.json"))
 
@@ -37,6 +39,7 @@ def load_risk_model(path=None):
         validate_composite(composite)
     for table_id, table in model.get("lookupTables", {}).items():
         validate_lookup_table(table_id, table)
+    validate_variables(model)
     return model
 
 
@@ -88,6 +91,127 @@ def lookup_country(table_id, code):
         if c in (str(m).strip().upper() for m in row.get("members", ())):
             return float(row["value"])
     return float(table["default"])
+
+
+# --------------------------------------------------------------------------- #
+# Variable catalogue + the formula evaluator's env/composite layer (Stage D).
+# A `variables` entry is a per-supplier scalar RESOLVED OUTSIDE the evaluator (a table
+# lookup, or — Stage G — a partition group) and injected into env[id]. A component's
+# `formula` composes those ids; evaluate_composite folds a composite over one supplier's env.
+# --------------------------------------------------------------------------- #
+def get_variables():
+    return load_risk_model().get("variables", {})
+
+
+def get_variable(var_id):
+    variables = get_variables()
+    if var_id not in variables:
+        raise KeyError(f"risk-model.json: no variable '{var_id}'")
+    return variables[var_id]
+
+
+def validate_variables(model):
+    """Fail-fast catalogue checks (Stage D):
+      - a variable id may not shadow a whitelisted function name (min/max/abs/sqrt);
+      - a `lookup` variable's table must exist and it must declare a `key`;
+      - a `computed` variable must declare a numeric `default` (its own missing-value handling,
+        since it has no table);
+      - supply_concentration + roster_concentration must reference the SAME (table, key) — one
+        signal under two ids (the documented r=-0.852 correlation follows from it), so a silent
+        split is disallowed;
+      - every component `formula` references only known variables, and a component's
+        `lookupTable` (kept from Stage A/B) matches its formula's lookup-variable table."""
+    variables = model.get("variables", {})
+    tables = model.get("lookupTables", {})
+    for vid, var in variables.items():
+        if formula_eval.is_reserved_name(vid):
+            raise ValueError(f"risk-model variable '{vid}': id shadows reserved function name")
+        kind = var.get("kind")
+        if kind == "lookup":
+            if var.get("table") not in tables:
+                raise ValueError(f"risk-model variable '{vid}': lookup table {var.get('table')!r} not found")
+            if not var.get("key"):
+                raise ValueError(f"risk-model variable '{vid}': a lookup variable needs a 'key'")
+        elif kind == "computed":
+            if not isinstance(var.get("default"), (int, float)) or isinstance(var.get("default"), bool):
+                raise ValueError(f"risk-model variable '{vid}': a computed variable needs a numeric 'default'")
+        else:
+            raise ValueError(f"risk-model variable '{vid}': unknown kind {kind!r}")
+
+    a, b = variables.get("supply_concentration"), variables.get("roster_concentration")
+    if a and b and (a.get("table"), a.get("key")) != (b.get("table"), b.get("key")):
+        raise ValueError(
+            "risk-model: supply_concentration and roster_concentration must reference the SAME "
+            "(table, key) — one signal under two ids; splitting them is disallowed"
+        )
+
+    for composite in model["composites"]:
+        for comp in composite["components"]:
+            formula = comp.get("formula")
+            if not formula:
+                continue
+            refs = formula_eval.referenced_names(formula)
+            for ref in refs:
+                if ref not in variables:
+                    raise ValueError(
+                        f"risk-model composite '{composite['id']}' component '{comp['id']}': "
+                        f"formula references unknown variable {ref!r}"
+                    )
+            lookup_table_ref = comp.get("lookupTable")
+            if lookup_table_ref:
+                used = {variables[r]["table"] for r in refs if variables[r].get("kind") == "lookup"}
+                if used != {lookup_table_ref}:
+                    raise ValueError(
+                        f"risk-model composite '{composite['id']}' component '{comp['id']}': "
+                        f"lookupTable {lookup_table_ref!r} must match its formula lookup table(s) {used}"
+                    )
+
+
+def resolve_env(var_ids, key_values, computed_maps):
+    """Build the per-supplier env {var_id -> float} for `var_ids`. A lookup variable applies its
+    table to the supplier's declared key field (key_values[var['key']]); a computed variable
+    reads its precomputed map by supplier id, falling back to the catalogue `default`. THE
+    resolver layer — the evaluator never does this."""
+    env = {}
+    for vid in var_ids:
+        var = get_variable(vid)
+        if var["kind"] == "lookup":
+            table = get_lookup_table(var["table"])
+            key_val = key_values[var["key"]]
+            if table.get("input") == "count":
+                env[vid] = lookup_numeric(var["table"], int(key_val))
+            else:
+                env[vid] = lookup_country(var["table"], key_val)
+        else:  # computed
+            m = computed_maps.get(vid, {})
+            env[vid] = float(m.get(key_values["supplier_id"], var.get("default", 0.0)))
+    return env
+
+
+def evaluate_composite(composite, env):
+    """Fold a composite over ONE supplier's env via each ENABLED component's FORMULA + bounds,
+    iterating in DECLARED CONFIG ORDER — float addition is not associative, so the order is part
+    of the byte-identity; do NOT reorder to a dict/set (test_evaluate_composite_order guards it).
+    Returns (score, contributions): score = combine_score(sum of weight*normalized, invert),
+    contributions = {component_id -> weight*normalized}."""
+    weights = resolve_effective_weights(composite)
+    invert = invert_polarity(composite)
+    total = 0.0
+    contributions = {}
+    for comp in composite["components"]:  # DECLARED ORDER — load-bearing for byte-identity
+        if not comp.get("enabled", True):
+            continue
+        cid = comp["id"]
+        bounds = comp.get("bounds", {"lo": 0.0, "hi": 100.0})
+        value = formula_eval.normalize_to_bounds(
+            formula_eval.evaluate_formula(comp["formula"], env),
+            bounds["lo"],
+            bounds["hi"],
+        )
+        contribution = weights[cid] * value
+        contributions[cid] = contribution
+        total += contribution
+    return float(combine_score(total, invert)), contributions
 
 
 def validate_composite(composite, tol=WEIGHT_SUM_TOL):

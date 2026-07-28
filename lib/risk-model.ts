@@ -32,6 +32,13 @@
 import riskModelJson from "@/config/risk-model.json";
 import defaultsJson from "@/config/risk-model.defaults.json";
 
+/** Per-component normalization bounds (Stage D): the formula result on [lo, hi] maps to
+ * [0, 100] (default (0, 100) is a bit-exact identity). */
+export interface FormulaBounds {
+  lo: number;
+  hi: number;
+}
+
 export interface RiskComponent {
   id: string;
   label: string;
@@ -62,6 +69,16 @@ export interface RiskComponent {
    * fingerprint. Absent on computed components (cost_premium) and the built-in dimensions.
    */
   lookupTable?: string;
+  /**
+   * Stage D: whitelisted arithmetic over `variables` ids; the component's value is
+   * normalize_to_bounds(evaluate(formula, env), bounds.lo, bounds.hi). Absent on the built-in
+   * sub-scores. ⚠️ NOT yet in the compute-affecting fingerprint (projectComputeAffecting) —
+   * formulas are not user-editable until Stage F, which must add formula + bounds + the
+   * referenced variable defs to the fingerprint (and drop lookupTable, resolving the table via
+   * the formula) BEFORE they become editable.
+   */
+  formula?: string;
+  bounds?: FormulaBounds;
 }
 
 export interface RiskComposite {
@@ -119,6 +136,22 @@ export interface LookupTable {
 
 export type LookupTables = Record<string, LookupTable>;
 
+/**
+ * A catalogue variable (Stage D): a per-supplier scalar RESOLVED OUTSIDE the evaluator and
+ * injected into env[id]. `lookup` variables declare `table` + `key` (the source field); their
+ * missing-value default is the TABLE's own default (single-source, not re-declared here).
+ * `computed` variables (cost_premium — a Stage G partition) declare an explicit `default`.
+ */
+export interface CatalogueVariable {
+  label: string;
+  kind: "lookup" | "computed";
+  table?: string;
+  key?: string;
+  resolver?: string;
+  default?: number;
+}
+export type CatalogueVariables = Record<string, CatalogueVariable>;
+
 export interface RiskModel {
   /** Config FILE-FORMAT version, separate from the per-composite content versions. */
   schemaVersion: string;
@@ -128,6 +161,12 @@ export interface RiskModel {
    * both risk composites' concentration terms.
    */
   lookupTables: LookupTables;
+  /**
+   * The formula namespace (Stage D): variable id -> resolver spec, referenced by component
+   * formulas and resolved to per-supplier scalars outside the evaluator. Optional so pre-Stage-D
+   * configs still type; the shipped config always carries it.
+   */
+  variables?: CatalogueVariables;
   composites: RiskComposite[];
 }
 
