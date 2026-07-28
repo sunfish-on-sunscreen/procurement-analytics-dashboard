@@ -37,11 +37,11 @@ import {
 
 // The pinned P baseline (schema 2.2.0). Deliberate config changes update these — same discipline
 // as the harness md5 — but a drift with no intended change is a bug this catches.
-const EXPECT_CONFIG_FP = "d3aa19ab";
+const EXPECT_CONFIG_FP = "ac398c0a"; // schema 2.4.0 (Stage G added cost_premium partition to scope)
 const EXPECT_COMPOSITE_FP: Record<string, string> = {
   performanceComposite: "ad0a6986",
   performanceRisk: "13c3213f",
-  supplyRisk: "9c8852d1",
+  supplyRisk: "c45418c0", // moved from 9c8852d1 in Stage G (partition now in cost_premium's spec)
 };
 
 let failures = 0;
@@ -223,6 +223,14 @@ check("formulaError flags an unknown variable",
 check("formulaError flags a locked variable",
   formulaError("supply_concentration + cycle_time_cv", "supplyRisk", RISK_MODEL.composites, vars) !== null);
 check("boundsError flags hi <= lo", boundsError({ lo: 100, hi: 0 }) !== null && boundsError({ lo: 0, hi: 100 }) === null);
+
+// N. Stage G: a cost_premium partition-parameter edit moves the fingerprint (compute-affecting).
+const partEdit = clone(RISK_MODEL);
+if (partEdit.variables?.cost_premium?.partition) partEdit.variables.cost_premium.partition.minGroupMembers = 3;
+check("cost_premium partition edit moves the fingerprint", cfp(partEdit) !== base);
+const modeEdit = clone(RISK_MODEL);
+if (modeEdit.variables?.cost_premium?.partition) modeEdit.variables.cost_premium.partition.benchmarkMode = "external";
+check("cost_premium benchmarkMode edit moves the fingerprint", cfp(modeEdit) !== base);
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

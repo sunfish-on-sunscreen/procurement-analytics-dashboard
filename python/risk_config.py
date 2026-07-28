@@ -142,6 +142,25 @@ def validate_variables(model):
         elif kind == "computed":
             if not isinstance(var.get("default"), (int, float)) or isinstance(var.get("default"), bool):
                 raise ValueError(f"risk-model variable '{vid}': a computed variable needs a numeric 'default'")
+            part = var.get("partition")
+            if part is not None:
+                _allowed = {
+                    "key": {"item", "item_period", "item_category"},
+                    "benchmarkStat": {"spend_weighted_mean", "mean", "median"},
+                    "belowMinimum": {"excluded", "neutral"},
+                    "benchmarkMode": {"internal", "external", "hybrid"},
+                }
+                for field, opts in _allowed.items():
+                    if part.get(field) not in opts:
+                        raise ValueError(
+                            f"risk-model variable '{vid}': partition.{field} must be one of {sorted(opts)}"
+                        )
+                for field in ("minGroupMembers", "minPosPerSupplierItem"):
+                    n = part.get(field)
+                    if not isinstance(n, int) or isinstance(n, bool) or n < 1:
+                        raise ValueError(
+                            f"risk-model variable '{vid}': partition.{field} must be an integer >= 1"
+                        )
         elif kind == "aggregate":
             if not isinstance(var.get("source"), str) or not var.get("source"):
                 raise ValueError(f"risk-model variable '{vid}': an aggregate variable needs a 'source' column")

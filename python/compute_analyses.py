@@ -1159,29 +1159,55 @@ def _import_friction_points(country):
     return risk_config.lookup_country("import_friction", country)
 
 
-def _cost_premium_points(purchases):
-    """Period-scoped cost premium NORMALIZED to 0..100 per supplier, from Purchase prices.
+# Stage G: the cost_premium PARTITION parameters, every one a real decision that used to be
+# hardcoded. Live in config (variables.cost_premium.partition) so they enter the fingerprint;
+# these DEFAULTS reproduce the pre-Stage-G behaviour EXACTLY (the harness gate).
+_COST_PREMIUM_DEFAULTS = {
+    "key": "item",                          # item | item_period | item_category
+    "benchmarkStat": "spend_weighted_mean",  # spend_weighted_mean | mean | median
+    "minGroupMembers": 2,                   # a group needs this many suppliers to be benchmarkable
+    "minPosPerSupplierItem": 2,             # a supplier x group needs this many POs to be counted
+    "belowMinimum": "excluded",             # excluded (drop the pair) | neutral (keep at premium 0)
+    "benchmarkMode": "internal",            # internal peer | external | hybrid
+}
+# Per-item external reference prices {item_name -> unit_price}, loaded from ReferencePrice by
+# main()/setup when external/hybrid mode is selected. DATA, not config -> NOT in the fingerprint.
+_REFERENCE_PRICES = None
 
-    For each item, the benchmark is the spend-weighted average unit price across
-    ALL suppliers selling it within the period (item_avg = sum(price*qty)/sum(qty)).
-    A supplier's premium on an item = its own spend-weighted avg unit price / item_avg
-    - 1, COUNTED only when that supplier x item has >= 2 POs (n=1 excluded as noise)
-    AND the item has >= 2 suppliers (single-source items have no benchmark -> neutral).
-    The supplier's overall premium is the spend-weighted average of its qualifying
-    item premiums (weight = the supplier's spend on each item); normalized points =
-    clip(premium * 250, 0, 100). The supplyRisk weight (0.25) scales this back onto the
-    old 0..25 contribution (0.25 * clip(premium*250,0,100) == clip(premium*62.5,0,25):
-    +8% -> 5, +20% -> 12.5, +40%+ -> 25; at/below market -> 0, never negative). Both the
-    factor 250/62.5 = 4 and 0.25 = 1/4 are powers of two, so the round-trip is exact.
-    Suppliers with no qualifying items -> 0 (returned absent).
-    """
+
+def _cost_premium_params():
+    """The cost_premium partition parameters from config, merged over the defaults. Falls back to
+    pure defaults if the config/variable is unavailable (e.g. a direct unit-test call)."""
+    try:
+        return {**_COST_PREMIUM_DEFAULTS, **(risk_config.get_variable("cost_premium").get("partition") or {})}
+    except Exception:  # noqa: BLE001
+        return dict(_COST_PREMIUM_DEFAULTS)
+
+
+def _cost_premium_points(purchases, params=None):
+    """Cost premium NORMALIZED to 0..100 per supplier (Stage G: partition-parameterised).
+
+    Peer-group comparison: group PO lines by the partition key (default item), benchmark = the
+    spend-weighted mean unit price across ALL suppliers in the group, a supplier's premium =
+    its own spend-weighted mean unit price / benchmark - 1, then aggregate the qualifying-group
+    premiums per supplier spend-weighted; points = clip(premium*250, 0, 100). At DEFAULT params
+    the pre-Stage-G code runs verbatim, so the result is byte-identical (harness gate)."""
+    P = {**_COST_PREMIUM_DEFAULTS, **(params if params is not None else _cost_premium_params())}
     if purchases is None or len(purchases) == 0:
         return {}
+    if P == _COST_PREMIUM_DEFAULTS:
+        return _cost_premium_default(purchases)
+    return _cost_premium_general(purchases, P)
+
+
+def _cost_premium_default(purchases):
+    """The pre-Stage-G cost premium — item partition, spend-weighted (qty) benchmark, min 2/2,
+    below-minimum pairs DROPPED, internal peer benchmark. Kept verbatim so the default path is
+    provably byte-identical; _cost_premium_general reproduces it, guarded by a test."""
     p = purchases[["supplierExternalId", "itemName", "unitPriceUsd", "quantity"]].copy()
     p["spend"] = p["unitPriceUsd"].astype(float) * p["quantity"].astype(float)
     p["qty"] = p["quantity"].astype(float)
 
-    # supplier x item: total spend, qty, PO count, spend-weighted avg unit price.
     g = (
         p.groupby(["itemName", "supplierExternalId"])
         .agg(spend=("spend", "sum"), qty=("qty", "sum"), po=("unitPriceUsd", "size"))
@@ -1190,7 +1216,6 @@ def _cost_premium_points(purchases):
     g = g[g["qty"] > 0].copy()
     g["avg_price"] = g["spend"] / g["qty"]
 
-    # item benchmark: spend-weighted avg unit price across all suppliers of the item.
     item = (
         g.groupby("itemName")
         .agg(item_spend=("spend", "sum"), item_qty=("qty", "sum"), n_sup=("supplierExternalId", "nunique"))
@@ -1201,11 +1226,77 @@ def _cost_premium_points(purchases):
     g = g.merge(item[["itemName", "item_avg", "n_sup"]], on="itemName", how="inner")
 
     g["premium"] = g["avg_price"] / g["item_avg"] - 1.0
-    # qualifying rows: supplier has >=2 POs of the item AND the item is benchmarkable.
     qual = g[(g["po"] >= 2) & (g["n_sup"] >= 2)]
 
     out = {}
     for sid, grp in qual.groupby("supplierExternalId"):
+        wsum = float(grp["spend"].sum())
+        if wsum <= 0:
+            continue
+        prem = float((grp["premium"] * grp["spend"]).sum() / wsum)
+        out[sid] = float(np.clip(prem * 250.0, 0.0, 100.0))
+    return out
+
+
+def _cost_premium_general(purchases, P):
+    """Partition-parameterised cost premium. `key` selects the group (item / item+period /
+    item+category); `benchmarkStat` the group benchmark; `minGroupMembers` / `minPosPerSupplierItem`
+    the qualifying thresholds; `belowMinimum` drops (excluded) or keeps-at-0 (neutral) a below-min
+    pair; `benchmarkMode` uses the internal peer average, an external per-item reference list, or
+    hybrid (external where present, internal otherwise). Reproduces _cost_premium_default when P is
+    the defaults (test_cost_premium_general_matches_default)."""
+    extra = {"item": [], "item_period": ["period"], "item_category": ["category"]}.get(P["key"], [])
+    # Fall back to item-only if a partition column is absent on this frame (defensive).
+    extra = [c for c in extra if c in purchases.columns]
+    group_cols = ["itemName"] + extra
+
+    p = purchases[["supplierExternalId", "itemName", "unitPriceUsd", "quantity"] + extra].copy()
+    p["spend"] = p["unitPriceUsd"].astype(float) * p["quantity"].astype(float)
+    p["qty"] = p["quantity"].astype(float)
+
+    g = (
+        p.groupby(group_cols + ["supplierExternalId"])
+        .agg(spend=("spend", "sum"), qty=("qty", "sum"), po=("unitPriceUsd", "size"))
+        .reset_index()
+    )
+    g = g[g["qty"] > 0].copy()
+    g["avg_price"] = g["spend"] / g["qty"]
+
+    stat = P["benchmarkStat"]
+    agg = g.groupby(group_cols)
+    if stat == "median":
+        bench = agg["avg_price"].median().rename("bench")
+    elif stat == "mean":
+        bench = agg["avg_price"].mean().rename("bench")
+    else:  # spend_weighted_mean == sum(price*qty)/sum(qty) over the group (the default)
+        gsum = agg.agg(_s=("spend", "sum"), _q=("qty", "sum"))
+        bench = (gsum["_s"] / gsum["_q"]).rename("bench")
+    n_sup = agg["supplierExternalId"].nunique().rename("n_sup")
+    item = bench.to_frame().join(n_sup).reset_index()
+
+    mode = P["benchmarkMode"]
+    if mode in ("external", "hybrid"):
+        ext = _REFERENCE_PRICES or {}
+        # external prices are keyed by item name only; overlay onto the (possibly finer) group.
+        ext_series = item["itemName"].map(lambda it: ext.get(str(it)))
+        if mode == "external":
+            item["bench"] = ext_series
+        else:  # hybrid: external where present, internal otherwise
+            item["bench"] = ext_series.where(ext_series.notna(), item["bench"])
+        item = item[item["bench"].notna() & (item["bench"] > 0)]
+
+    g = g.merge(item, on=group_cols, how="inner")
+    g["premium"] = g["avg_price"] / g["bench"] - 1.0
+    g["qualifies"] = (g["po"] >= P["minPosPerSupplierItem"]) & (g["n_sup"] >= P["minGroupMembers"])
+
+    if P["belowMinimum"] == "neutral":
+        scored = g.copy()
+        scored.loc[~scored["qualifies"], "premium"] = 0.0
+    else:  # excluded: drop below-minimum pairs
+        scored = g[g["qualifies"]]
+
+    out = {}
+    for sid, grp in scored.groupby("supplierExternalId"):
         wsum = float(grp["spend"].sum())
         if wsum <= 0:
             continue

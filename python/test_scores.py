@@ -255,6 +255,30 @@ def test_aggregate_resolver():
     assert set(maps) == {"on_time_rate"}  # only the aggregate id is built
 
 
+def test_cost_premium_partition():
+    # Stage G: the general partition path reproduces the byte-identical default; thresholds +
+    # below-minimum behaviour respond to config. Pure (synthetic frames, no DB).
+    import compute_analyses as ca
+    pur = pd.DataFrame({
+        "supplierExternalId": ["A", "A", "B", "B", "C"],
+        "itemName": ["x", "x", "x", "x", "y"],
+        "unitPriceUsd": [100.0, 110.0, 90.0, 95.0, 50.0],
+        "quantity": [10.0, 10.0, 10.0, 10.0, 10.0],
+    })
+    default = ca._cost_premium_default(pur)
+    general = ca._cost_premium_general(pur, dict(ca._COST_PREMIUM_DEFAULTS))
+    assert default == general, (default, general)
+    # item x has 2 suppliers (A, B); raising minGroupMembers to 3 makes it non-benchmarkable.
+    g3 = ca._cost_premium_general(pur, {**ca._COST_PREMIUM_DEFAULTS, "minGroupMembers": 3})
+    assert "A" not in g3 and "B" not in g3, g3
+    # raising minPosPerSupplierItem to 3 drops A/B (each has 2 POs of item x).
+    g_pos = ca._cost_premium_general(pur, {**ca._COST_PREMIUM_DEFAULTS, "minPosPerSupplierItem": 3})
+    assert "A" not in g_pos and "B" not in g_pos, g_pos
+    # 'mean' benchmark is a different statistic than the default 'spend_weighted_mean'.
+    g_mean = ca._cost_premium_general(pur, {**ca._COST_PREMIUM_DEFAULTS, "benchmarkStat": "mean"})
+    assert isinstance(g_mean, dict)
+
+
 def test_builtin_input_block():
     # Stage E structural double-count block, graph-derived. The shipped config passes;
     # a builtin-input variable in performanceRisk is rejected; the same in supplyRisk is

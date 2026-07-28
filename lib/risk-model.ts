@@ -142,6 +142,22 @@ export type LookupTables = Record<string, LookupTable>;
  * missing-value default is the TABLE's own default (single-source, not re-declared here).
  * `computed` variables (cost_premium — a Stage G partition) declare an explicit `default`.
  */
+/**
+ * Stage G: the cost_premium PARTITION parameters — a peer-group price comparison, each field a
+ * real decision that used to be hardcoded. COMPUTE-AFFECTING config (in the fingerprint). The
+ * reference PRICES an external/hybrid benchmark reads are DATA (a Prisma table), NOT config, so
+ * they do NOT enter the fingerprint — a printed report under external/hybrid mode is reproducible
+ * only if the uploaded price list is also unchanged (stated on the Methodology page).
+ */
+export interface CostPremiumPartition {
+  key: "item" | "item_period" | "item_category";
+  benchmarkStat: "spend_weighted_mean" | "mean" | "median";
+  minGroupMembers: number;
+  minPosPerSupplierItem: number;
+  belowMinimum: "excluded" | "neutral";
+  benchmarkMode: "internal" | "external" | "hybrid";
+}
+
 export interface CatalogueVariable {
   label: string;
   kind: "lookup" | "computed" | "aggregate" | "locked";
@@ -155,6 +171,9 @@ export interface CatalogueVariable {
   table?: string;
   key?: string;
   resolver?: string;
+  /** `computed` cost_premium (Stage G): its partition parameters — compute-affecting, so in the
+   * fingerprint. Absent on other variables. */
+  partition?: CostPremiumPartition;
   /** `aggregate` (Stage E): the snake_case PO column the generic resolver aggregates. */
   source?: string;
   /** `aggregate` (Stage E): the aggregation (risk_config.AGG_FUNCS). Compute-affecting. */
@@ -411,7 +430,15 @@ function projectComponentFormula(
       // display/validation metadata and stay OUT of the projection.
       return { id, kind: "aggregate", source: v.source ?? null, agg: v.agg ?? null, default: v.default ?? null };
     }
-    return { id, kind: "computed", resolver: v.resolver ?? null, default: v.default ?? null };
+    return {
+      id,
+      kind: "computed",
+      resolver: v.resolver ?? null,
+      default: v.default ?? null,
+      // Stage G: cost_premium's partition parameters are compute-affecting. The external/hybrid
+      // benchmark's PRICE LIST is data (a Prisma table), not config, so it is NOT projected here.
+      partition: v.partition ?? null,
+    };
   });
   const tables = [...tableIds].sort().map((tid) => {
     const t = lookupTables[tid];
