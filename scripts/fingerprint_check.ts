@@ -33,6 +33,9 @@ import {
   generateComponentId,
   isCustomComponentId,
   componentReferrers,
+  resetCompositeToDefaults,
+  compositeAtDefaults,
+  RISK_MODEL_DEFAULTS,
   type RiskModel,
   type RiskComposite,
   type RiskComponent,
@@ -317,6 +320,41 @@ check("omitting builtins with no knob change does NOT bump the version", !omitBu
 // O.6 componentReferrers is empty on the shipped config — nothing references a component id, so a
 //     non-builtin remove orphans nothing (vacuous by the data model; see the function's doc).
 check("componentReferrers empty for a shipped component", componentReferrers("cost_premium", RISK_MODEL.composites).length === 0);
+
+// P. TASK 2 — risk-model.defaults.json carries the FULL shipped component definition per composite,
+//    so reset restores a removed component exactly (formula/bounds/label). Assert (a) defaults ==
+//    shipped FIELD BY FIELD so an edit to one without the other fails loudly, and (b) reset
+//    reproduces the shipped composite exactly even from a mutated (removed + reweighted) one.
+const DEF_FIELDS: (keyof RiskComponent)[] = [
+  "id", "label", "definition", "provenance", "builtin", "configuredIn", "enabled", "weight", "formula",
+];
+function componentsFieldEqual(a: RiskComponent, b: RiskComponent): boolean {
+  for (const f of DEF_FIELDS) if ((a[f] ?? null) !== (b[f] ?? null)) return false;
+  return (a.bounds?.lo ?? null) === (b.bounds?.lo ?? null) && (a.bounds?.hi ?? null) === (b.bounds?.hi ?? null);
+}
+for (const c of RISK_MODEL.composites) {
+  const defs = RISK_MODEL_DEFAULTS.composites[c.id];
+  const sameLen = !!defs && defs.length === c.components.length;
+  const allEqual = sameLen && c.components.every((comp, i) => componentsFieldEqual(comp, defs[i]));
+  check(`defaults.json ${c.id} == shipped components field-by-field`, allEqual,
+    sameLen ? "a field differs" : `length ${defs?.length} != ${c.components.length}`);
+}
+// reset reproduces the shipped composite exactly, even from a mutated one (remove import_friction +
+// reweight). supplyRisk has removable non-builtin components.
+const mutated = clone(composite(RISK_MODEL, "supplyRisk"));
+mutated.components = mutated.components.filter((c) => c.id !== "import_friction");
+mutated.components[0].weight = 0.9;
+const reset = resetCompositeToDefaults(mutated, RISK_MODEL_DEFAULTS);
+const shipped = composite(RISK_MODEL, "supplyRisk");
+check(
+  "reset-to-defaults reproduces the shipped supplyRisk exactly (re-adds the removed component)",
+  reset.components.length === shipped.components.length &&
+    reset.components.every((comp, i) => componentsFieldEqual(comp, shipped.components[i])),
+);
+check(
+  "compositeAtDefaults: true for shipped, false for the mutated composite",
+  compositeAtDefaults(shipped, RISK_MODEL_DEFAULTS) && !compositeAtDefaults(mutated, RISK_MODEL_DEFAULTS),
+);
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

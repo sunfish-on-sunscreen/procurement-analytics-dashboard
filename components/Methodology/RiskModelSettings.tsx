@@ -22,6 +22,8 @@ import {
   formulaError,
   deriveProvenance,
   isCustomComponentId,
+  resetCompositeToDefaults,
+  compositeAtDefaults,
   WEIGHT_SUM_TOL,
   RISK_MODEL_DEFAULTS,
   type RiskModel,
@@ -203,14 +205,6 @@ function CompositeImpactPreview({ candidate }: { candidate: RiskComposite }) {
 
 const pct = (w: number) => `${(w * 100).toFixed(1)}%`;
 
-// Compare a component (weight+enabled) against a {weight,enabled} target.
-function sameKnobs(
-  a: { enabled: boolean; weight: number },
-  b: { enabled: boolean; weight: number } | undefined,
-): boolean {
-  return !!b && a.enabled === b.enabled && a.weight === b.weight;
-}
-
 export function RiskModelSettings({
   initialModel,
   coverageInputs,
@@ -294,41 +288,18 @@ export function RiskModelSettings({
     });
   }
 
-  // Is the SAVED composite already at its shipped defaults — SAME component id set AND matching
-  // knobs? (Reset is offered only when not.) A removed shipped component or an added custom one
-  // changes the set length, so the length check catches both.
+  // Is the SAVED composite already at its shipped defaults? (Reset is offered only when not.) The
+  // pure compositeAtDefaults compares the full component list order-aware against the FULL default
+  // definitions (TASK 2) — an added custom or removed shipped component both read as "not default".
   function activeAtDefaults(i: number): boolean {
-    const a = active.composites[i];
-    const defs = RISK_MODEL_DEFAULTS.composites[a.id];
-    if (!defs) return true;
-    if (a.components.length !== Object.keys(defs).length) return false;
-    return a.components.every((c) => sameKnobs(c, defs[c.id]));
+    return compositeAtDefaults(active.composites[i], RISK_MODEL_DEFAULTS);
   }
 
-  // A shipped (default) component is MISSING from the saved composite — i.e. it was removed. Reset
-  // cannot restore it: the frozen reset target (risk-model.defaults.json) carries knobs only, not a
-  // removed component's formula/label/bounds, so a clean reset is impossible and Reset is disabled.
-  function shippedComponentsMissing(i: number): boolean {
-    const a = active.composites[i];
-    const defs = RISK_MODEL_DEFAULTS.composites[a.id];
-    if (!defs) return false;
-    const ids = new Set(a.components.map((c) => c.id));
-    return Object.keys(defs).some((id) => !ids.has(id));
-  }
-
-  // A composite reset to its shipped defaults: DROP added (custom) components and reset each
-  // shipped component's knobs. Only reachable when no shipped component is missing (guarded by
-  // shippedComponentsMissing), so the result is the exact default component set. Formula/bounds are
-  // not reset (defaults.json is knobs-only — a pre-existing limitation, unchanged by Stage I).
+  // A composite reset to its shipped defaults (TASK 2): the FULL default component list, so a
+  // REMOVED shipped component is restored (formula/bounds/label included), not just knobs — the
+  // knobs-only limitation is gone. Fed through the normal per-composite Save.
   function defaultComposite(i: number): RiskComposite {
-    const a = active.composites[i];
-    const defs = RISK_MODEL_DEFAULTS.composites[a.id] ?? {};
-    return {
-      ...a,
-      components: a.components
-        .filter((c) => defs[c.id])
-        .map((c) => ({ ...c, enabled: defs[c.id].enabled, weight: defs[c.id].weight })),
-    };
+    return resetCompositeToDefaults(active.composites[i], RISK_MODEL_DEFAULTS);
   }
 
   function setComponent(ci: number, cj: number, patch: Partial<DraftComponent>) {
@@ -425,7 +396,9 @@ export function RiskModelSettings({
               // rejects a formula edit on a builtin, and applies a label only to a custom component
               // (a shipped label is fixed). An ADDED component's id is absent on disk → the server
               // appends it; a non-builtin id absent here → the server removes it.
-              ...(x.builtin ? {} : { formula: x.formula, bounds: x.bounds, label: x.label }),
+              ...(x.builtin
+                ? {}
+                : { formula: x.formula, bounds: x.bounds, label: x.label, definition: x.definition }),
             })),
           },
         ],
@@ -564,8 +537,7 @@ export function RiskModelSettings({
           // Add is offered only on a composite of formula-defined components (no built-ins) —
           // driven off the builtin flag, never a composite-id check.
           const addEligible = composite.components.every((c) => !c.builtin);
-          const removedShipped = shippedComponentsMissing(ci);
-          const canReset = !activeAtDefaults(ci) && !removedShipped;
+          const canReset = !activeAtDefaults(ci);
           const confirming = confirmingResetId === composite.id;
           const err = errorById[composite.id];
           return (
@@ -833,11 +805,9 @@ export function RiskModelSettings({
                         onClick={() => setConfirmingResetId(composite.id)}
                         disabled={!canReset || busy}
                         title={
-                          removedShipped
-                            ? "Reset can't restore a removed shipped component — re-import the dataset to restore the full default set"
-                            : canReset
-                              ? "Restore this composite's shipped default components and weights"
-                              : "Already at the shipped defaults"
+                          canReset
+                            ? "Restore this composite's shipped default components and weights (re-adds a removed component)"
+                            : "Already at the shipped defaults"
                         }
                       >
                         Reset to defaults

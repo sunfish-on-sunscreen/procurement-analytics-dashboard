@@ -15,6 +15,7 @@ import {
   buildConfigStamp,
   isCustomComponentId,
   componentReferrers,
+  RISK_MODEL_DEFAULTS,
 } from "@/lib/risk-model";
 import { readRiskModel, writeRiskModel } from "@/lib/risk-model-server";
 
@@ -43,6 +44,9 @@ const Body = z
                 bounds: z.object({ lo: z.number().finite(), hi: z.number().finite() }).optional(),
                 // Stage I: display name for an ADDED component, or a RENAME of a custom one.
                 label: z.string().optional(),
+                // TASK 2: description for an APPENDED component (so a reset can restore a removed
+                // shipped component's definition). Display-only; ignored for kept components.
+                definition: z.string().optional(),
               }),
             )
             .min(1),
@@ -136,9 +140,12 @@ export async function POST(request: Request) {
           { status: 400 },
         );
       }
-      if (!isCustomComponentId(c.id)) {
+      // Allowed adds: a generated custom_ id, OR a shipped default component being RESTORED by
+      // reset-to-defaults (a removed shipped component re-added — not a custom id, but a known one).
+      const isKnownDefault = (RISK_MODEL_DEFAULTS.composites[ce.id] ?? []).some((d) => d.id === c.id);
+      if (!isCustomComponentId(c.id) && !isKnownDefault) {
         return NextResponse.json(
-          { error: `${ce.id}.${c.id}: an added component id must be generated (start with "custom_").` },
+          { error: `${ce.id}.${c.id}: a component added here must be generated ("custom_…") or a shipped default being restored.` },
           { status: 400 },
         );
       }

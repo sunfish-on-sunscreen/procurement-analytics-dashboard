@@ -242,12 +242,15 @@ export interface LookupTableDefault {
   rows: LookupRow[];
 }
 
-/** Frozen defaults: editable knobs (weight + enabled) per composite/component AND the
- * content (default + rows) per lookup table. The reset target — the same source the
- * byte-identical baseline is defined against. Reset restores BOTH, so a table edit cannot
- * survive "reset to defaults" (a partial reset that reports success is worse than none). */
+/** Frozen defaults: the FULL shipped component definition per composite (TASK 2 — an ORDERED array,
+ * not just knobs, so a REMOVED shipped component is recoverable in-app: reset restores it exactly,
+ * formula/bounds/label included) AND the content (default + rows) per lookup table. The reset target
+ * — the same source the byte-identical baseline is defined against, kept byte-identical to
+ * risk-model.json's components (asserted field by field in scripts/fingerprint_check.ts). Reset
+ * restores BOTH composites and tables, so neither a table edit nor a component add/remove survives
+ * "reset to defaults". */
 export interface RiskModelDefaults {
-  composites: Record<string, Record<string, { weight: number; enabled: boolean }>>;
+  composites: Record<string, RiskComponent[]>;
   lookupTables: Record<string, LookupTableDefault>;
 }
 
@@ -589,6 +592,11 @@ export interface CompositeEdit {
      * page and stay fixed). Display-only — NOT in the compute-affecting fingerprint, so a rename
      * never moves a score's fingerprint. */
     label?: string;
+    /** TASK 2: description for an APPENDED component. A custom add carries a generic line; a reset
+     * re-adding a removed SHIPPED component carries its shipped definition, so reset restores it
+     * exactly. Applied only when appending — a kept component keeps its on-disk definition.
+     * Display-only, not in the fingerprint. */
+    definition?: string;
   }[];
 }
 
@@ -696,7 +704,10 @@ function newComponentFromEdit(
   return {
     id: e.id,
     label: e.label ?? e.id,
-    definition: "Organisation-added risk component.",
+    // A reset re-adding a removed SHIPPED component carries its shipped definition; a custom add
+    // carries a generic line. Provenance is always DERIVED from the formula (never trusted from the
+    // client), so a re-added shipped component gets its correct provenance too.
+    definition: e.definition ?? "Organisation-added risk component.",
     provenance: deriveProvenance(e.formula ?? "", variables),
     enabled: e.enabled,
     weight: e.weight,
@@ -793,6 +804,48 @@ export function mergeAndBumpVersions(
     return { ...composite, components, version: nextVersion(composite.version) };
   });
   return { merged: { ...current, composites }, changedIds };
+}
+
+/**
+ * A composite reset to its shipped defaults (TASK 2): the FULL default component list from
+ * risk-model.defaults.json (ids, ORDER, weights, enabled, formulas, bounds, labels), so a REMOVED
+ * shipped component is restored — not just knobs. The composite's own display/version fields
+ * (label/shortLabel/version/polarity) are carried from `current` because they are not user-editable
+ * and never drift. Returns `current` unchanged if the composite has no defaults entry. Pure; the
+ * settings UI feeds the result through the normal per-composite Save.
+ */
+export function resetCompositeToDefaults(
+  current: RiskComposite,
+  defaults: RiskModelDefaults,
+): RiskComposite {
+  const defs = defaults.composites[current.id];
+  if (!defs) return current;
+  return { ...current, components: defs.map((c) => ({ ...c })) };
+}
+
+/**
+ * True iff a composite is already at its shipped defaults (TASK 2) — the SAME component set in the
+ * SAME order with matching enabled / weight / formula / bounds. Order-aware (index-aligned): a
+ * reordered or add/removed set is not "at defaults". Reset is offered only when this is false.
+ * Compares the compute-affecting + identity fields; display-only label/definition are not compared
+ * (a shipped label never drifts, and an added custom component is caught by the length difference).
+ */
+export function compositeAtDefaults(current: RiskComposite, defaults: RiskModelDefaults): boolean {
+  const defs = defaults.composites[current.id];
+  if (!defs) return true;
+  if (current.components.length !== defs.length) return false;
+  return current.components.every((c, i) => {
+    const d = defs[i];
+    return (
+      !!d &&
+      c.id === d.id &&
+      c.enabled === d.enabled &&
+      c.weight === d.weight &&
+      (c.formula ?? null) === (d.formula ?? null) &&
+      (c.bounds?.lo ?? null) === (d.bounds?.lo ?? null) &&
+      (c.bounds?.hi ?? null) === (d.bounds?.hi ?? null)
+    );
+  });
 }
 
 /** The whitelisted formula operators, for the UI operator buttons + the "ends in an operator"

@@ -1,20 +1,21 @@
 {
+  "_comment": "FROZEN reset target — the FULL shipped component definition per composite (not just knobs), so removing a shipped component is recoverable in-app: Reset restores it exactly, formula/bounds/label included. Every field MUST stay byte-identical to config/risk-model.json's components (scripts/fingerprint_check.ts asserts it field by field). lookupTables carries the default+rows only (Stage B).",
   "composites": {
-    "performanceComposite": {
-      "quality_score": { "weight": 0.30, "enabled": true },
-      "delivery_score": { "weight": 0.30, "enabled": true },
-      "process_score": { "weight": 0.22, "enabled": true },
-      "risk_score": { "weight": 0.18, "enabled": true }
-    },
-    "performanceRisk": {
-      "country_distance": { "weight": 0.60, "enabled": true },
-      "roster_concentration": { "weight": 0.40, "enabled": true }
-    },
-    "supplyRisk": {
-      "supply_concentration": { "weight": 0.50, "enabled": true },
-      "cost_premium": { "weight": 0.25, "enabled": true },
-      "import_friction": { "weight": 0.25, "enabled": true }
-    }
+    "performanceComposite": [
+      { "id": "quality_score", "label": "Quality", "definition": "Existing quality sub-score: per-PO defect rate + complaint rate, each normalized 0-100 against fixed bounds, averaged. Computed by scores.py from transaction data; a built-in sub-score, not a formula-editable component.", "provenance": "computed", "builtin": true, "enabled": true, "weight": 0.3 },
+      { "id": "delivery_score", "label": "Delivery", "definition": "Existing delivery sub-score: on-time-delivery % + average lead time, each normalized 0-100 against fixed bounds, averaged. Computed by scores.py from transaction data; a built-in sub-score, not a formula-editable component.", "provenance": "computed", "builtin": true, "enabled": true, "weight": 0.3 },
+      { "id": "process_score", "label": "Process", "definition": "Existing process sub-score: three-way-match pass rate, normalized 0-100. Computed by scores.py from transaction data; a built-in sub-score, not a formula-editable component.", "provenance": "computed", "builtin": true, "enabled": true, "weight": 0.22 },
+      { "id": "risk_score", "label": "Risk", "definition": "The performanceRisk composite output (structural: country distance + roster concentration, inverted so higher=safer). A built-in sub-score, not a formula-editable component.", "provenance": "computed", "builtin": true, "configuredIn": "performanceRisk", "enabled": true, "weight": 0.18 }
+    ],
+    "performanceRisk": [
+      { "id": "country_distance", "label": "Country distance", "definition": "Geographic supply-distance tier of the supplier's country. 0-100 lookup {Indonesia:0, ASEAN:30, Asia-Pacific:60, other:100}.", "provenance": "lookup", "formula": "country_distance", "bounds": { "lo": 0, "hi": 100 }, "enabled": true, "weight": 0.6 },
+      { "id": "roster_concentration", "label": "Roster concentration", "definition": "Roster-based supply concentration (the SAME curve as supplyRisk.supply_concentration), on the 0-100 axis {0:100,1:70,2:44,3:24,4:10,>=5:0}.", "provenance": "lookup", "formula": "roster_concentration", "bounds": { "lo": 0, "hi": 100 }, "enabled": true, "weight": 0.4 }
+    ],
+    "supplyRisk": [
+      { "id": "supply_concentration", "label": "Supply concentration", "definition": "Step curve on the number of OTHER suppliers in the same category across the full roster (active or not); fewer alternatives -> higher risk. Normalized curve {0:100,1:70,2:44,3:24,4:10,>=5:0}.", "provenance": "lookup", "formula": "supply_concentration", "bounds": { "lo": 0, "hi": 100 }, "enabled": true, "weight": 0.5 },
+      { "id": "cost_premium", "label": "Cost premium", "definition": "Spend-weighted item-price premium vs the cross-supplier benchmark, over supplier x item pairs with >=2 POs where the item has >=2 suppliers. Normalized clip(premium*250, 0, 100); at/below market -> 0.", "provenance": "computed", "formula": "cost_premium", "bounds": { "lo": 0, "hi": 100 }, "enabled": true, "weight": 0.25 },
+      { "id": "import_friction", "label": "Import friction", "definition": "Indonesia trade-agreement coverage of the supplier's country. Normalized {domestic:0, AFTA:32, RCEP-non-ASEAN:64, other:100}.", "provenance": "lookup", "formula": "import_friction", "bounds": { "lo": 0, "hi": 100 }, "enabled": true, "weight": 0.25 }
+    ]
   },
   "lookupTables": {
     "concentration_curve": {
