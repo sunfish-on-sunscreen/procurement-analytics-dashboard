@@ -144,7 +144,14 @@ export type LookupTables = Record<string, LookupTable>;
  */
 export interface CatalogueVariable {
   label: string;
-  kind: "lookup" | "computed" | "aggregate";
+  kind: "lookup" | "computed" | "aggregate" | "locked";
+  /**
+   * Stage E locked entry (a measured-dead / unusable field, e.g. payment days-past-terms).
+   * When set, this variable is shown in the picker LOCKED with this reason (not hidden — the
+   * reason teaches why it is unusable) and a formula referencing it is REJECTED. Orthogonal to
+   * a live resolver: locked entries carry only label + reason.
+   */
+  locked?: string;
   table?: string;
   key?: string;
   resolver?: string;
@@ -608,6 +615,7 @@ export function formulaError(
   for (const id of refs) {
     const v = variables[id];
     if (!v) return `Unknown variable "${id}".`;
+    if (v.locked) return `"${id}" is locked: ${v.locked}`;
     // The double-count block mirrors Python: enforced on ENABLED components only (a disabled
     // component reaches no score). The route passes enforceBlock = component.enabled.
     if (enforceBlock) {
@@ -625,6 +633,32 @@ export function boundsError(bounds: FormulaBounds): string | null {
   if (!Number.isFinite(bounds.lo) || !Number.isFinite(bounds.hi)) return "Bounds must be numbers.";
   if (bounds.hi <= bounds.lo) return "The upper bound must be greater than the lower bound.";
   return null;
+}
+
+/** The source sheet of a catalogue variable, for the editor's pick-a-sheet grouping (Stage F).
+ * Derived, not stored — a lookup on a country field vs a category roster, a computed line
+ * partition, or a PO-grain aggregate. */
+export function variableSheet(v: CatalogueVariable): string {
+  if (v.kind === "locked") return "unavailable";
+  if (v.kind === "aggregate") return "purchase_orders";
+  if (v.kind === "computed") return "po_lines";
+  return v.key === "country" ? "suppliers (country)" : "suppliers (roster)";
+}
+
+/**
+ * Provenance of a formula, DERIVED from the sheets its variables touch (Stage F) — "computed"
+ * if it reads any aggregate/computed field, else "lookup". Never entered by hand; the editor
+ * shows this badge live as the formula changes.
+ */
+export function deriveProvenance(
+  formula: string,
+  variables: CatalogueVariables,
+): "computed" | "lookup" {
+  for (const id of referencedVariables(formula)) {
+    const v = variables[id];
+    if (v && (v.kind === "aggregate" || v.kind === "computed")) return "computed";
+  }
+  return "lookup";
 }
 
 /** A per-table edit payload: the table id + its full editable content (default + rows). */

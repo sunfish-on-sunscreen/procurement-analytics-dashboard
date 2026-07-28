@@ -53,7 +53,12 @@
     "defect_rate": { "label": "Defect rate", "kind": "aggregate", "source": "defect_count", "agg": "defect_ratio_pct", "default": 0.0, "feedsBuiltin": "quality_score", "eta2": { "category": 0.114, "country": 0.094 } },
     "complaint_rate": { "label": "Complaint rate", "kind": "aggregate", "source": "complaint_count", "agg": "share_ge1_pct", "default": 0.0, "feedsBuiltin": "quality_score", "eta2": { "category": 0.219, "country": 0.130 } },
     "cycle_time": { "label": "Total cycle time (PR to payment, days)", "kind": "aggregate", "source": "total_cycle_days", "agg": "mean", "default": 0.0, "eta2": { "category": 0.879, "country": 0.528 } },
-    "spend_share": { "label": "Spend share (% of portfolio)", "kind": "aggregate", "source": "total_value_usd", "agg": "spend_share_pct", "default": 0.0, "eta2": { "category": 0.752, "country": 0.241 } }
+    "spend_share": { "label": "Spend share (% of portfolio)", "kind": "aggregate", "source": "total_value_usd", "agg": "spend_share_pct", "default": 0.0, "eta2": { "category": 0.752, "country": 0.241 } },
+    "payment_days_past_terms": { "label": "Payment days past terms", "kind": "locked", "locked": "Inert — a uniform random draw on {0..15}; nothing explains its variance (Methodology dead-metrics)." },
+    "payment_date": { "label": "Payment date", "kind": "locked", "locked": "Outside window scope — the reporting window anchors on order date (poDate), not payment date." },
+    "requisition_estimate": { "label": "Requisition estimate accuracy", "kind": "locked", "locked": "Generator artifact — the estimate is the order value jittered by Uniform(-0.10, +0.15), a copy of the outcome, not a forecast." },
+    "cycle_time_cv": { "label": "Cycle-time variability (CV)", "kind": "locked", "locked": "Measured dead — ~93% determined by category (eta-squared 0.94); re-reports buying method, not supplier conduct.", "eta2": { "category": 0.939, "country": 0.27 } },
+    "delivery_variability": { "label": "Delivery variability", "kind": "locked", "locked": "Measured — no forward signal; the on-time boolean is a coin flip at the global rate.", "eta2": { "category": 0.863, "country": 0.314 } }
   },
   "composites": [
     {

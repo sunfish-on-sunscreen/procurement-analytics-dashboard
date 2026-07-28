@@ -151,6 +151,9 @@ def validate_variables(model):
                 )
             if not isinstance(var.get("default"), (int, float)) or isinstance(var.get("default"), bool):
                 raise ValueError(f"risk-model variable '{vid}': an aggregate variable needs a numeric 'default'")
+        elif kind == "locked":
+            if not isinstance(var.get("locked"), str) or not var.get("locked"):
+                raise ValueError(f"risk-model variable '{vid}': a locked variable needs a 'locked' reason")
         else:
             raise ValueError(f"risk-model variable '{vid}': unknown kind {kind!r}")
 
@@ -172,6 +175,11 @@ def validate_variables(model):
                     raise ValueError(
                         f"risk-model composite '{composite['id']}' component '{comp['id']}': "
                         f"formula references unknown variable {ref!r}"
+                    )
+                if variables[ref].get("locked"):
+                    raise ValueError(
+                        f"risk-model composite '{composite['id']}' component '{comp['id']}': "
+                        f"formula references LOCKED variable {ref!r}: {variables[ref]['locked']}"
                     )
 
     validate_builtin_input_block(model)

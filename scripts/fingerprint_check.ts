@@ -220,6 +220,8 @@ check("formulaError flags a trailing operator",
   formulaError("country_distance +", "performanceRisk", RISK_MODEL.composites, vars) !== null);
 check("formulaError flags an unknown variable",
   formulaError("country_distance + nope", "performanceRisk", RISK_MODEL.composites, vars) !== null);
+check("formulaError flags a locked variable",
+  formulaError("supply_concentration + cycle_time_cv", "supplyRisk", RISK_MODEL.composites, vars) !== null);
 check("boundsError flags hi <= lo", boundsError({ lo: 100, hi: 0 }) !== null && boundsError({ lo: 0, hi: 100 }) === null);
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);

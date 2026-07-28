@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import path from "path";
 
 import type { SensitivityData } from "@/lib/sensitivity";
+import type { PreviewData } from "@/lib/preview-types";
 
 export type PythonResult = {
   code: number;
@@ -148,5 +149,50 @@ export function runSensitivity(
     } catch (e) {
       return { code: -1, data: null, stderr: `${res.stderr}\nJSON parse error: ${String(e)}` };
     }
+  });
+}
+
+/**
+ * Stage F: run python/preview.py for ONE candidate composite (written to its stdin), returning
+ * per-supplier raw -> normalized -> score + the Kraljic/zone impact. Read-only (preview.py never
+ * writes; it monkeypatches + restores the config for the impact recompute). THE preview uses the
+ * Python evaluator so it matches a saved report — a second TS evaluator would disagree on rounding.
+ * preview.py prints a structured {"error": ...} and exits 0 on any failure, so `data` may carry an
+ * error field; a non-zero code / unparseable stdout returns data: null.
+ */
+export function runPreview(
+  candidate: unknown,
+  timeoutMs = 60_000,
+): Promise<{ code: number; data: PreviewData | null; stderr: string }> {
+  return new Promise((resolve) => {
+    const root = process.cwd();
+    const script = path.join(root, "python", "preview.py");
+    const child = spawn(resolvePythonExecutable(), [script], {
+      cwd: root,
+      detached: false,
+      stdio: "pipe",
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      stderr += `\n[python killed after ${timeoutMs}ms timeout]`;
+      child.kill();
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ code: -1, data: null, stderr: `${stderr}\n${String(err)}` });
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      try {
+        resolve({ code: code ?? -1, data: JSON.parse(stdout.trim()) as PreviewData, stderr });
+      } catch (e) {
+        resolve({ code: -1, data: null, stderr: `${stderr}\nJSON parse error: ${String(e)}` });
+      }
+    });
+    child.stdin.write(JSON.stringify({ composite: candidate }));
+    child.stdin.end();
   });
 }

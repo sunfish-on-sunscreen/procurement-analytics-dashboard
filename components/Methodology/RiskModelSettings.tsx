@@ -27,8 +27,10 @@ import {
   type ConfigStamp,
   type LookupTableEdit,
   type LookupCoverageInputs,
+  type FormulaBounds,
 } from "@/lib/risk-model";
 import { LookupTableCard } from "@/components/Methodology/LookupTableCard";
+import { FormulaEditorCard } from "@/components/Methodology/FormulaEditorCard";
 
 // The draft keeps each weight as a STRING so the input types smoothly ("0.", "0.5");
 // it is parsed to a number for the live renormalization + validation.
@@ -125,6 +127,8 @@ export function RiskModelSettings({
   const [savingId, setSavingId] = useState<string | null>(null);
   const [confirmingResetId, setConfirmingResetId] = useState<string | null>(null);
   const [errorById, setErrorById] = useState<Record<string, string | null>>({});
+  // Stage F: which draft component's formula overlay is open ({composite index, component index}).
+  const [formulaEdit, setFormulaEdit] = useState<{ ci: number; cj: number } | null>(null);
 
   const router = useRouter();
   // Phase 2 of the two-phase save: after ANY successful config save, auto-run the sensitivity
@@ -170,7 +174,14 @@ export function RiskModelSettings({
     if (!a) return true;
     return draft[i].components.some((comp, j) => {
       const ac = a.components[j];
-      return !ac || comp.enabled !== ac.enabled || Number.parseFloat(comp.weightStr) !== ac.weight;
+      return (
+        !ac ||
+        comp.enabled !== ac.enabled ||
+        Number.parseFloat(comp.weightStr) !== ac.weight ||
+        comp.formula !== ac.formula ||
+        comp.bounds?.lo !== ac.bounds?.lo ||
+        comp.bounds?.hi !== ac.bounds?.hi
+      );
     });
   }
 
@@ -228,6 +239,9 @@ export function RiskModelSettings({
               id: x.id,
               enabled: x.enabled,
               weight: x.weight,
+              // Formula + bounds are sent only for formula-defined components; the server rejects
+              // a formula edit on a builtin sub-score anyway.
+              ...(x.builtin ? {} : { formula: x.formula, bounds: x.bounds }),
             })),
           },
         ],
@@ -466,6 +480,22 @@ export function RiskModelSettings({
                               <span className="font-medium">Lookup tables</span> below).
                             </p>
                           )}
+                          {!comp.builtin && (
+                            <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                              <code className="rounded bg-muted/60 px-1.5 py-0.5 font-mono text-xs break-all">
+                                {comp.formula ?? "—"}
+                              </code>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={busy}
+                                onClick={() => setFormulaEdit({ ci, cj })}
+                              >
+                                Edit formula
+                              </Button>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex shrink-0 items-center gap-2">
@@ -631,7 +661,12 @@ export function RiskModelSettings({
                 <tbody>
                   {composite.components.map((comp) => (
                     <tr key={comp.id} className="border-b">
-                      <td className="py-1 pr-3">{comp.label}</td>
+                      <td className="py-1 pr-3">
+                        {comp.label}
+                        {comp.formula ? (
+                          <span className="font-mono text-muted-foreground"> = {comp.formula}</span>
+                        ) : null}
+                      </td>
                       <td className="py-1 pr-3">{comp.provenance}</td>
                       <td className="py-1 pr-3 text-right tabular-nums">{pct(comp.weight)}</td>
                       <td className="py-1 pr-3 text-right tabular-nums">
@@ -683,6 +718,31 @@ export function RiskModelSettings({
           );
         })}
       </div>
+
+      {formulaEdit &&
+        (() => {
+          const dc = draft[formulaEdit.ci];
+          const comp = dc?.components[formulaEdit.cj];
+          if (!dc || !comp) return null;
+          const initialBounds: FormulaBounds = comp.bounds ?? { lo: 0, hi: 100 };
+          return (
+            <FormulaEditorCard
+              compositeId={dc.id}
+              componentId={comp.id}
+              componentLabel={comp.label}
+              weight={Number.parseFloat(comp.weightStr)}
+              composites={parsed}
+              variables={active.variables ?? {}}
+              initialFormula={comp.formula ?? comp.id}
+              initialBounds={initialBounds}
+              onApply={(formula, bounds) => {
+                setComponent(formulaEdit.ci, formulaEdit.cj, { formula, bounds });
+                setFormulaEdit(null);
+              }}
+              onClose={() => setFormulaEdit(null)}
+            />
+          );
+        })()}
     </div>
   );
 }

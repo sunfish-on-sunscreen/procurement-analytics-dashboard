@@ -212,6 +212,13 @@ def test_variable_validation():
         "agg",
     )
 
+    # Stage F: a formula may not reference a LOCKED variable (a measured-dead field).
+    def break_locked(m):
+        for c in m["composites"]:
+            if c["id"] == "supplyRisk":
+                c["components"][0]["formula"] = "supply_concentration + cycle_time_cv"
+    rejects(break_locked, "LOCKED")
+
 
 def test_aggregate_resolver():
     # Stage E: the generic aggregate resolver reproduces the operational aggregates from a
