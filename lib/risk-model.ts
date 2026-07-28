@@ -53,9 +53,28 @@ export interface RiskComponent {
   weight: number; // 0..1
   /**
    * Marks a built-in sub-score (the performanceComposite dimensions) that is computed
-   * by scores.py and NOT formula-defined — so the future formula editor must not offer
-   * to edit its formula. Absent/false on the risk composites' components. Weight edit
-   * and enable/disable stay allowed; add/remove are not offered.
+   * by scores.py and NOT formula-defined — so the formula editor must not offer to edit
+   * its formula, and add/remove are not offered for it. Absent/false on the risk
+   * composites' components. Weight edit and enable/disable stay allowed.
+   *
+   * ⚠️ PREREQUISITE (DEFERRED, NOT built) — ADD-COMPONENT ON performanceComposite. Adding a
+   * non-builtin (formula) component to performanceComposite is a CORE scoring-path change, NOT
+   * an extension of the risk-composite mechanism: performanceComposite is WEIGHTS-ONLY — scores.py
+   * combines the four builtin sub-score COLUMNS by weight (`sum(m[col]*weight)`) and does NOT blend
+   * through risk_config.evaluate_composite the way supplyRisk/performanceRisk do. Add is excluded
+   * on performanceComposite today via THIS flag (every component is builtin); the realistic need
+   * (drop a dimension) is already served by disabling a builtin. Before enabling add/remove of
+   * non-builtin components here, THREE things must land TOGETHER:
+   *   1. compute_scores routes performanceComposite through evaluate_composite, with the builtin
+   *      sub-score columns entering env as variables — one blend path, not two;
+   *   2. the double-count guard (builtinInputBlockedIn / validate_builtin_input_block) is extended
+   *      from the TRANSITIVE case to the DIRECT SIBLING case — a builtin-input variable alongside
+   *      that builtin in performanceComposite (e.g. on_time_rate next to delivery_score) double-
+   *      counts more directly than the transitive case the guard was written for;
+   *   3. python/preview.py accepts performanceComposite as a candidate and reports PERFORMANCE ZONE
+   *      movement, not Kraljic quadrant (it KeyErrors on builtins' missing `formula` today).
+   * The guard is deliberately NOT pre-extended — with no add there is no live sibling case, and we
+   * do not build for cases that cannot occur (cf. the vacuous componentReferrers orphan check).
    */
   builtin?: boolean;
   /**
