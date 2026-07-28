@@ -16,6 +16,7 @@ import { sensitivityView } from "@/lib/sensitivity";
 import { configFingerprint } from "@/lib/risk-model";
 import { RiskModelSettings } from "@/components/Methodology/RiskModelSettings";
 import { SensitivityTables } from "@/components/Methodology/SensitivityTables";
+import { FREE_TIER_RATE_LIMITS } from "@/lib/report-llm-types";
 
 // ONE source of truth for section identity: number (shown in the heading and in a
 // print-only suffix on every in-prose reference), title, and anchor id. In-prose
@@ -726,6 +727,25 @@ export default async function MethodologyPage() {
               deliberate design choice.
             </p>
             <p>
+              <strong className="text-foreground">
+                Which provider, and how your data is handled.
+              </strong>{" "}
+              The narrative is written by Google Gemini through the Gemini API. On
+              Google&apos;s free (unpaid) tier, the data-handling terms differ from a paid
+              commercial tier: Google may use the prompts and responses to improve its
+              products, and human reviewers may read the inputs and outputs. A paid tier
+              does not use prompts or responses to improve Google&apos;s products. Because
+              only the aggregate values described above are sent — never transaction rows —
+              and because the data in this deployment is synthetic, the exposure here is
+              low. Anyone pointing this feature at real procurement data should read this
+              paragraph first and weigh a paid tier. The free tier has no per-request cost;
+              what constrains use is the request rate — roughly{" "}
+              {FREE_TIER_RATE_LIMITS.requestsPerMinute} requests per minute and{" "}
+              {FREE_TIER_RATE_LIMITS.requestsPerDay.toLocaleString("en-US")} per day for
+              the default model, though Google sets these per project (the exact quota
+              appears in the Google AI Studio dashboard).
+            </p>
+            <p>
               <strong className="text-foreground">Generated, not reproducible.</strong>{" "}
               Language-model output is non-deterministic — the same inputs do not yield the
               same words twice. The narrative is therefore generated per view and{" "}
@@ -737,10 +757,10 @@ export default async function MethodologyPage() {
               <strong className="text-foreground">
                 Optional, and absent without a key.
               </strong>{" "}
-              The feature is off unless an Anthropic API key is configured on the server.
-              With no key, every brief renders with the fixed template narrative and the
-              rest of the application is unchanged — this is the default the organisation
-              receives.
+              The feature is off unless a Google Gemini API key is configured on the
+              server. With no key, every brief renders with the fixed template narrative
+              and the rest of the application is unchanged — this is the default the
+              organisation receives.
             </p>
           </section>
         </CardContent>

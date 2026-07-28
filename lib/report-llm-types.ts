@@ -26,8 +26,30 @@ export type GeneratedBriefProse = {
 /**
  * Why a generation attempt did not produce prose. A MISSING KEY degrades exactly
  * like a failure — never an error — so the report always renders with the template.
+ * `rate_limited` is kept DISTINCT from `error` so the editor can tell the user the
+ * free-tier cap was hit (wait and retry) rather than that no key is configured — the
+ * two read differently during a demo.
  */
-export type BriefNarrativeUnavailableReason = "no_key" | "error" | "timeout" | "empty";
+export type BriefNarrativeUnavailableReason =
+  | "no_key"
+  | "error"
+  | "timeout"
+  | "empty"
+  | "rate_limited";
+
+/**
+ * Informational free-tier request caps for the DEFAULT model (gemini-2.5-flash). The
+ * free tier has no per-request cost, so what actually constrains use here is the request
+ * rate. ⚠️ NOT a source of truth: Google sets rate limits PER PROJECT and no longer
+ * publishes a universal table (the authoritative figures are in the Google AI Studio
+ * dashboard), and free-tier quotas were reduced in December 2025. These are indicative
+ * only — the analog of the old informational pricing constant — and change if the
+ * operator overrides GEMINI_REPORT_MODEL. Update to match the project's actual quota.
+ */
+export const FREE_TIER_RATE_LIMITS = {
+  requestsPerMinute: 15,
+  requestsPerDay: 1500,
+} as const;
 
 export type BriefNarrativeResult =
   | {
@@ -41,9 +63,10 @@ export type BriefNarrativeResult =
        *  printed footer as "inputs" so a printout records what produced its prose. The
        *  prose itself is not reproducible from it — see Methodology. */
       inputsHash: string;
+      /** MEASURED token usage for this generation (from the provider's usage metadata).
+       *  There is no per-request cost on the free tier — see FREE_TIER_RATE_LIMITS for
+       *  what constrains use instead. */
       usage: { inputTokens: number; outputTokens: number };
-      /** Informational per-report cost at current pricing (USD). */
-      costUsd: number;
     }
   | { available: false; reason: BriefNarrativeUnavailableReason };
 

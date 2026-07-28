@@ -1,11 +1,12 @@
 import "server-only";
-import Anthropic from "@anthropic-ai/sdk";
+import { GoogleGenAI, Type, ApiError, type Schema } from "@google/genai";
 import { createHash } from "node:crypto";
 import type { ReportTone } from "@/lib/report-config";
 import type { BriefFactsPayload } from "@/lib/report-narrative";
 import type { RenderedSupplierBrief } from "@/lib/report-narrative";
 import type {
   BriefNarrativeResult,
+  BriefNarrativeUnavailableReason,
   GeneratedBriefProse,
 } from "@/lib/report-llm-types";
 
@@ -15,51 +16,38 @@ import type {
  * pre-formatted values and rewrites the six prose strings; it never computes,
  * recomputes, or alters a number.
  *
- * FALLBACK IS THE DEFAULT. A missing ANTHROPIC_API_KEY, an API error, or a timeout
- * all return { available: false } — the caller renders the template narrative and a
- * visible note. The app is fully functional with no key (the handover condition).
+ * PROVIDER: Google Gemini via the @google/genai SDK. ⚠️ On the FREE tier, Google may
+ * use API inputs and outputs to improve its products and human reviewers may read them
+ * (the paid tier does not) — see Methodology §2.8. The payload is aggregate values only
+ * (buildBriefPayload) — no transaction rows, no line prices — so exposure is bounded,
+ * and this dataset is synthetic. Point it at real procurement data only after reading
+ * that section.
  *
- * MODEL IS CONFIG, NOT CODE (ANTHROPIC_REPORT_MODEL) with a Sonnet default, so the
+ * FALLBACK IS THE DEFAULT. A missing GEMINI_API_KEY, an API error, a rate-limit, or a
+ * timeout all return { available: false } — the caller renders the template narrative
+ * and a visible note. The app is fully functional with no key (the handover condition).
+ *
+ * MODEL IS CONFIG, NOT CODE (GEMINI_REPORT_MODEL) with a gemini-2.5-flash default, so the
  * organisation can raise the tier later without a code change — the same
  * config-not-code discipline as the risk-model weights.
  */
 
-const DEFAULT_MODEL = "claude-sonnet-5";
+const DEFAULT_MODEL = "gemini-2.5-flash";
 // One request per explicit user action; cap output so a runaway generation can't
-// balloon cost. Six short prose fields need well under this — the headroom is only so
-// a long-but-valid rewrite is never truncated (you pay for tokens generated, not the cap).
-const MAX_TOKENS = 1200;
+// balloon token use. Six short prose fields need well under this — the headroom is only
+// so a long-but-valid rewrite is never truncated (a truncated JSON parses as unusable
+// and silently degrades to the template, which we want to avoid on the success path).
+const MAX_OUTPUT_TOKENS = 2048;
 const TIMEOUT_MS = 25_000;
 
-/**
- * Informational pricing (USD per 1M tokens) purely to report a per-report cost —
- * NOT a billing source of truth. Update if Anthropic pricing changes. Sonnet 5 is
- * shown at its standard rate; an intro rate (lower) runs through 2026-08-31.
- */
-const PRICING: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-5": { input: 3, output: 15 },
-  "claude-opus-5": { input: 5, output: 25 },
-  "claude-haiku-4-5": { input: 1, output: 5 },
-};
-
-/** The env-configured narrative model (default Sonnet 5). */
+/** The env-configured narrative model (default gemini-2.5-flash). */
 export function reportNarrativeModel(): string {
-  return process.env.ANTHROPIC_REPORT_MODEL?.trim() || DEFAULT_MODEL;
+  return process.env.GEMINI_REPORT_MODEL?.trim() || DEFAULT_MODEL;
 }
 
 /** Whether the feature is enabled at all (a key is present). Read server-side only. */
 export function reportNarrativeEnabled(): boolean {
-  return !!process.env.ANTHROPIC_API_KEY?.trim();
-}
-
-function estimateCost(
-  model: string,
-  usage: { inputTokens: number; outputTokens: number },
-): number {
-  const p = PRICING[model] ?? PRICING[DEFAULT_MODEL];
-  return (
-    (usage.inputTokens * p.input + usage.outputTokens * p.output) / 1_000_000
-  );
+  return !!process.env.GEMINI_API_KEY?.trim();
 }
 
 /**
@@ -80,11 +68,19 @@ function canonicalJson(value: unknown): string {
 }
 
 // The model returns exactly these six fields as JSON. buyProse / trajectoryProse are
-// "" (not null) when the brief has no item / trajectory block — a plain-string schema
-// (no nullable union) is the most portable across structured-output validators.
-const OUTPUT_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
+// "" (not null) when the brief has no item / trajectory block. Gemini's responseSchema
+// is a Schema built from the Type enum (no `additionalProperties`); `propertyOrdering`
+// pins the field order so the emitted JSON is stable.
+const OUTPUT_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    headline: { type: Type.STRING },
+    situation: { type: Type.ARRAY, items: { type: Type.STRING } },
+    flagged: { type: Type.ARRAY, items: { type: Type.STRING } },
+    buyProse: { type: Type.STRING },
+    trajectoryProse: { type: Type.STRING },
+    recommendation: { type: Type.STRING },
+  },
   required: [
     "headline",
     "situation",
@@ -93,15 +89,15 @@ const OUTPUT_SCHEMA = {
     "trajectoryProse",
     "recommendation",
   ],
-  properties: {
-    headline: { type: "string" },
-    situation: { type: "array", items: { type: "string" } },
-    flagged: { type: "array", items: { type: "string" } },
-    buyProse: { type: "string" },
-    trajectoryProse: { type: "string" },
-    recommendation: { type: "string" },
-  },
-} as const;
+  propertyOrdering: [
+    "headline",
+    "situation",
+    "flagged",
+    "buyProse",
+    "trajectoryProse",
+    "recommendation",
+  ],
+};
 
 const SYSTEM_PROMPT = `You are a procurement analyst's writing assistant. You rewrite the PROSE of a single-supplier brief in a business report, following the reader's instruction and tone, while leaving every fact exactly as given.
 
@@ -173,10 +169,28 @@ function coerceProse(
   };
 }
 
+/** Classify a thrown SDK/runtime error into a degrade reason. A free-tier rate/quota
+ *  cap (HTTP 429 RESOURCE_EXHAUSTED) is DISTINCT from a generic failure so the editor
+ *  can tell the user to wait and retry rather than to check the key — the two read
+ *  differently during a demo. A client-side abort maps to timeout; everything else is a
+ *  generic error. Every case still degrades to the template. */
+function classifyError(err: unknown): BriefNarrativeUnavailableReason {
+  if (err instanceof ApiError && err.status === 429) return "rate_limited";
+  if (
+    err instanceof Error &&
+    (err.name === "TimeoutError" ||
+      err.name === "AbortError" ||
+      /timeout|timed out|abort/i.test(err.message))
+  ) {
+    return "timeout";
+  }
+  return "error";
+}
+
 export async function generateSupplierBriefNarrative(
   args: GenerateArgs,
 ): Promise<BriefNarrativeResult> {
-  const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) return { available: false, reason: "no_key" };
   const model = reportNarrativeModel();
 
@@ -213,25 +227,34 @@ export async function generateSupplierBriefNarrative(
     .digest("hex")
     .slice(0, 12);
 
-  const client = new Anthropic({ apiKey, timeout: TIMEOUT_MS, maxRetries: 1 });
+  const ai = new GoogleGenAI({ apiKey });
   try {
-    const res = await client.messages.create({
+    const res = await ai.models.generateContent({
       model,
-      max_tokens: MAX_TOKENS,
-      system: SYSTEM_PROMPT,
-      // A grounded prose rewrite needs no chain-of-thought: disabling thinking keeps
-      // cost predictable (no thinking tokens), gives the whole budget to the JSON (no
-      // truncation), and is the cheapest configuration. effort:"low" trims the rest.
-      thinking: { type: "disabled" },
-      output_config: {
-        effort: "low",
-        format: { type: "json_schema", schema: OUTPUT_SCHEMA },
+      contents: userContent,
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        // A grounded prose rewrite: keep it low-temperature so the model reshapes
+        // wording rather than inventing figures the system prompt already forbids.
+        temperature: 0.4,
+        maxOutputTokens: MAX_OUTPUT_TOKENS,
+        // Structured JSON — Gemini guarantees response.text is valid JSON matching
+        // OUTPUT_SCHEMA (no fences, no prose wrapper).
+        responseMimeType: "application/json",
+        responseSchema: OUTPUT_SCHEMA,
+        // Gemini 2.5 Flash "thinks" by default; those tokens would consume the output
+        // budget and can truncate the JSON (which then silently degrades to template).
+        // Disable it — no chain-of-thought is needed to reword grounded prose — for
+        // predictable output and lower latency, the same intent as the previous
+        // provider's disabled thinking.
+        thinkingConfig: { thinkingBudget: 0 },
+        // Client-side timeout: abort after TIMEOUT_MS and degrade to the template.
+        abortSignal: AbortSignal.timeout(TIMEOUT_MS),
       },
-      messages: [{ role: "user", content: userContent }],
     });
-    if (res.stop_reason === "refusal") return { available: false, reason: "error" };
-    const textBlock = res.content.find((b) => b.type === "text");
-    const raw = textBlock && "text" in textBlock ? textBlock.text : "";
+
+    const raw = res.text?.trim() ?? "";
+    if (!raw) return { available: false, reason: "empty" };
     let parsed: unknown;
     try {
       parsed = JSON.parse(raw);
@@ -241,20 +264,11 @@ export async function generateSupplierBriefNarrative(
     const prose = coerceProse(parsed, draftProse);
     if (!prose) return { available: false, reason: "empty" };
     const usage = {
-      inputTokens: res.usage.input_tokens,
-      outputTokens: res.usage.output_tokens,
+      inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: res.usageMetadata?.candidatesTokenCount ?? 0,
     };
-    return {
-      available: true,
-      prose,
-      model,
-      inputsHash,
-      usage,
-      costUsd: estimateCost(model, usage),
-    };
+    return { available: true, prose, model, inputsHash, usage };
   } catch (err) {
-    const reason =
-      err instanceof Anthropic.APIConnectionTimeoutError ? "timeout" : "error";
-    return { available: false, reason };
+    return { available: false, reason: classifyError(err) };
   }
 }
