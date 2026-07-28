@@ -16,6 +16,12 @@ import {
   type SupplierDirectory,
 } from "@/lib/supplier-detail";
 import type { ReportFocusData } from "@/lib/report-focus-types";
+import {
+  TONE_PRESET_PROMPTS,
+  type BriefNarrativeResult,
+  type GeneratedBriefProse,
+  type NarrativeStatus,
+} from "@/lib/report-llm-types";
 import { buttonVariants } from "@/components/ui/button";
 import {
   ReportDocument,
@@ -253,6 +259,90 @@ export function ReportEditor({
     };
   }, [focusSupplierId, startDate, endDate]);
 
+  // --- Optional LLM narrative (editor-only; NEVER persisted) ----------------
+  // A regeneration reads differently from identical numbers, so the printed PDF is
+  // the record — generation runs on an explicit Generate click, one request each.
+  const tone = config.tone ?? "operational";
+  // The instruction textarea seeds from the selected tone's preset and re-seeds when
+  // the tone changes (render-time previous-value pattern — no setState-in-effect).
+  const [narrativePrompt, setNarrativePrompt] = useState(
+    () => TONE_PRESET_PROMPTS[tone],
+  );
+  const [prevTone, setPrevTone] = useState(tone);
+  if (prevTone !== tone) {
+    setPrevTone(tone);
+    setNarrativePrompt(TONE_PRESET_PROMPTS[tone]);
+  }
+
+  // The generated result is tagged with the (supplier, span, tone) key it belongs to,
+  // so changing any of them reverts the brief to the template until re-generated. A
+  // stale in-flight response lands under its own key and is ignored by the compare.
+  const narrativeKey = focusSupplierId ? `${focusSupplierId}_${spanKey}_${tone}` : "";
+  const [narrative, setNarrative] = useState<{
+    key: string;
+    status: NarrativeStatus;
+    result: BriefNarrativeResult | null;
+  }>({ key: "", status: "idle", result: null });
+  const narrativeStatus: NarrativeStatus =
+    narrative.key === narrativeKey ? narrative.status : "idle";
+  const narrativeResult = narrative.key === narrativeKey ? narrative.result : null;
+  const generatedNarrative: {
+    prose: GeneratedBriefProse;
+    model: string;
+    inputsHash: string;
+  } | null = narrativeResult?.available
+    ? {
+        prose: narrativeResult.prose,
+        model: narrativeResult.model,
+        inputsHash: narrativeResult.inputsHash,
+      }
+    : null;
+  const canGenerate =
+    !!focusSupplierId && !!focusData && narrativeStatus !== "loading";
+
+  // Plain handler (not useCallback) — it's a click handler passed to a non-memoized
+  // child, and its span-derived closure values defeat manual-memoization preservation
+  // under the React Compiler, which memoizes it automatically anyway.
+  const onGenerateNarrative = async () => {
+    if (!focusSupplierId || !startDate || !endDate) return;
+    const key = `${focusSupplierId}_${startDate}_${endDate}_${tone}`;
+    setNarrative({ key, status: "loading", result: null });
+    try {
+      const res = await fetch("/api/reports/brief-narrative", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          supplierId: focusSupplierId,
+          startDate,
+          endDate,
+          selectedPeriodId,
+          tone,
+          prompt: narrativePrompt,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as BriefNarrativeResult | null;
+      if (!res.ok || !data) {
+        setNarrative({
+          key,
+          status: "unavailable",
+          result: { available: false, reason: "error" },
+        });
+        return;
+      }
+      setNarrative({
+        key,
+        status: data.available ? "generated" : "unavailable",
+        result: data,
+      });
+    } catch {
+      setNarrative({
+        key,
+        status: "unavailable",
+        result: { available: false, reason: "error" },
+      });
+    }
+  };
+
   const canSave = config.period.mode === "single";
 
   async function handleSave() {
@@ -306,6 +396,19 @@ export function ReportEditor({
         pdfFilename={meta.filename}
         open={sidebarOpen}
         onOpenChange={setSidebarOpen}
+        narrative={
+          config.focus.kind === "supplier"
+            ? {
+                prompt: narrativePrompt,
+                onPromptChange: setNarrativePrompt,
+                onGenerate: onGenerateNarrative,
+                onResetPrompt: () => setNarrativePrompt(TONE_PRESET_PROMPTS[tone]),
+                status: narrativeStatus,
+                canGenerate,
+                result: narrativeResult,
+              }
+            : undefined
+        }
       />
 
       <div className="relative min-w-0 flex-1">
@@ -342,6 +445,8 @@ export function ReportEditor({
                 config={config}
                 supplierCategory={supplierCategory}
                 focusData={focusData}
+                generatedNarrative={generatedNarrative}
+                narrativeUnavailable={narrativeStatus === "unavailable"}
                 embedded
               />
             ) : null}

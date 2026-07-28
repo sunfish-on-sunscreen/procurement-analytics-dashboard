@@ -39,6 +39,7 @@ const SECTIONS = {
   aggregation: { n: "2.5", title: "Aggregation of rounded components" },
   recompute: { n: "2.6", title: "Recompute-on-read and report reproducibility" },
   hazards: { n: "2.7", title: "Cross-cutting inference hazards" },
+  "generated-narrative": { n: "2.8", title: "Generated report narrative" },
 
   composite: { n: "3", title: "The Performance Composite" },
   "sub-scores": { n: "3.1", title: "Sub-scores" },
@@ -691,6 +692,55 @@ export default async function MethodologyPage() {
               can honestly pass, and running the prediction test only invites a spurious
               hit that then has to be dismantled after the fact. Report the dead outcome
               and stop.
+            </p>
+          </section>
+
+          <section id="generated-narrative" className="space-y-3">
+            <H3 id="generated-narrative" />
+            <p>
+              Every figure, table, and classification in a report is computed by the
+              analytics engine and is{" "}
+              <Ref to="recompute">reproducible from the configuration fingerprint</Ref>.
+              The <em>prose</em> of a single-supplier brief — its headline, the situation
+              paragraphs, the plain-language flags, the what-you-buy summary, the
+              trajectory sentence, and the recommendation — can <strong>optionally</strong>{" "}
+              be written by a language model in place of the fixed template. Only the
+              wording changes; no number, table, or label is touched.
+            </p>
+            <p>
+              <strong className="text-foreground">The model never computes.</strong> It
+              receives the already-computed values — supplier name, scores,
+              classifications, rank, and notable year-over-year deltas, with every figure
+              pre-formatted as text — and rewrites the wording to match the reader&apos;s
+              instruction and tone. It is instructed to reference only the values it is
+              given and never to calculate, re-derive, round, or invent one. A number in
+              the generated prose that disagrees with the computed values is a defect, not
+              a matter of style.
+            </p>
+            <p>
+              <strong className="text-foreground">What is sent.</strong> Only aggregate
+              values leave the application — the supplier&apos;s scores, classifications,
+              rank, spend total and share, notable deltas, and its top items by spend
+              share. <strong>No raw purchase-order rows and no line-item unit prices are
+              sent.</strong> The narrative does not need them, and the smaller payload is a
+              deliberate design choice.
+            </p>
+            <p>
+              <strong className="text-foreground">Generated, not reproducible.</strong>{" "}
+              Language-model output is non-deterministic — the same inputs do not yield the
+              same words twice. The narrative is therefore generated per view and{" "}
+              <strong>not stored</strong>: the printed PDF is the record, exactly as the
+              configuration stamp is already the record for the numbers. A regenerated
+              report will read differently even from identical numbers.
+            </p>
+            <p>
+              <strong className="text-foreground">
+                Optional, and absent without a key.
+              </strong>{" "}
+              The feature is off unless an Anthropic API key is configured on the server.
+              With no key, every brief renders with the fixed template narrative and the
+              rest of the application is unchanged — this is the default the organisation
+              receives.
             </p>
           </section>
         </CardContent>

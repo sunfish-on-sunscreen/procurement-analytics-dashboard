@@ -17,6 +17,7 @@ import type {
   FocusItem,
   FocusTrajectoryPoint,
 } from "@/lib/report-focus-types";
+import type { GeneratedBriefProse } from "@/lib/report-llm-types";
 import { deriveCycleFlags } from "@/lib/cycle-flags";
 import {
   buildAnomalyCrossref,
@@ -1302,6 +1303,137 @@ export function renderSupplierBrief(
     trajectory: briefTrajectory(f, tone),
     recommendation: briefRecommendation(f),
     resolved,
+  };
+}
+
+// ==========================================================================
+// LLM NARRATIVE PAYLOAD — the boundary (Focus → supplier brief)
+// The AGGREGATE values a generator receives to rewrite the brief's prose. Every
+// number that appears in prose is pre-formatted to a display STRING here, so the
+// model inserts the exact figure it was handed and never formats, rounds, rescales,
+// or computes one. Deliberately carries NO raw purchase-order rows and NO line-item
+// unit prices — only supplier-level scores, classifications, rank, notable deltas,
+// and item NAMES with their spend SHARE. A smaller payload is a design decision the
+// org can defend ("where does our data go") — see lib/report-llm.ts + Methodology.
+// ==========================================================================
+
+export type BriefFactsPayload = {
+  name: string;
+  category: string | null;
+  country: string | null;
+  rankBySpend: number | null;
+  totalSpend: string; // "$62.1M"
+  spendShareOfPortfolio: string; // "11%" / "<1%"
+  orderCount: number;
+  abcClass: "A" | "B" | "C" | null;
+  kraljicQuadrant: KraljicQuadrant | null;
+  kraljicMeaning: string | null;
+  supplyRiskScore: number | null;
+  performanceZone: PerformanceZone | null;
+  zoneMeaning: string | null;
+  performanceScore: string | null; // "72"
+  performanceMedian: string; // "78"
+  aboveMedian: boolean;
+  processFlags: string[]; // plain-language, active flags only
+  outlierOrderCount: number;
+  lensDisagreement: string | null;
+  yearOverYear: {
+    quadrantFrom: string | null;
+    quadrantTo: string | null;
+    spendChange: string | null; // "+18%"
+    performanceChange: string | null; // "+5 pts"
+  } | null;
+  itemCount: number;
+  topItems: { name: string; share: string }[]; // top 2 — name + spend SHARE only
+  activeYears: { year: string; spend: string; performanceScore: string | null }[];
+};
+
+/** Project the pure BriefFacts into the aggregate, display-formatted payload a
+ *  generator receives. Pure; numbers == the analyses + the focus assembler. */
+export function buildBriefPayload(
+  input: ArgumentInput,
+  focus: SupplierFocusData | null,
+  supplierId: string,
+): BriefFactsPayload {
+  const f = buildBriefFacts(input, focus, supplierId);
+  const activeFlags = f.process
+    ? (["has_outlier", "inconsistent", "has_stage_dom"] as const)
+        .filter((k) => f.process![k])
+        .map((k) => PROC_FLAG_PROSE[k])
+    : [];
+  const yearOverYear = f.temporal
+    ? {
+        quadrantFrom: f.temporal.quadFrom,
+        quadrantTo: f.temporal.quadTo,
+        spendChange:
+          f.temporal.spendPct != null
+            ? `${f.temporal.spendPct > 0 ? "+" : ""}${f.temporal.spendPct}%`
+            : null,
+        performanceChange:
+          f.temporal.scoreDelta != null
+            ? `${f.temporal.scoreDelta > 0 ? "+" : ""}${f.temporal.scoreDelta} pts`
+            : null,
+      }
+    : null;
+  const topItems = f.items.slice(0, 2).map((i) => ({
+    name: i.itemName,
+    share: f.totalSpend > 0 ? sharePct((i.totalSpend / f.totalSpend) * 100) : "—",
+  }));
+  return {
+    name: f.name,
+    category: f.category,
+    country: f.country,
+    rankBySpend: f.rank,
+    totalSpend: usdM(f.totalSpend),
+    spendShareOfPortfolio: sharePct(f.spendPct),
+    orderCount: f.poCount,
+    abcClass: f.abcClass,
+    kraljicQuadrant: f.quadrant,
+    kraljicMeaning: f.quadrant ? QUAD_MEANING[f.quadrant] : null,
+    supplyRiskScore: f.supplyRisk != null ? +f.supplyRisk.toFixed(2) : null,
+    performanceZone: f.zone,
+    zoneMeaning: f.zone ? ZONE_MEANING[f.zone] : null,
+    performanceScore: f.perfScore != null ? f.perfScore.toFixed(0) : null,
+    performanceMedian: f.perfMedian.toFixed(0),
+    aboveMedian: f.aboveMedian,
+    processFlags: activeFlags,
+    outlierOrderCount: f.outlierPoCount,
+    lensDisagreement: f.lens,
+    yearOverYear,
+    itemCount: f.items.length,
+    topItems,
+    activeYears: f.trajectory.map((t) => ({
+      year: t.year,
+      spend: usdM(t.spend),
+      performanceScore: t.performanceScore != null ? t.performanceScore.toFixed(0) : null,
+    })),
+  };
+}
+
+/**
+ * Overlay LLM-generated PROSE onto a template RenderedSupplierBrief, keeping every
+ * non-prose field (subtitle, the buy/trajectory TABLES, resolved) exactly as computed.
+ * Pure. Falls back to the template value per field when the model omitted one, and —
+ * critically — keeps the template's `flaggedClean` verdict so a dropped `flagged` list
+ * can never turn a genuinely-flagged supplier into "nothing flagged".
+ */
+export function applyGeneratedProse(
+  brief: RenderedSupplierBrief,
+  prose: GeneratedBriefProse,
+): RenderedSupplierBrief {
+  return {
+    ...brief,
+    headline: prose.headline || brief.headline,
+    situation: prose.situation.length ? prose.situation : brief.situation,
+    flagged: prose.flagged.length ? prose.flagged : brief.flagged,
+    flaggedClean: brief.flaggedClean,
+    buy: brief.buy
+      ? { ...brief.buy, prose: prose.buyProse || brief.buy.prose }
+      : brief.buy,
+    trajectory: brief.trajectory
+      ? { ...brief.trajectory, prose: prose.trajectoryProse || brief.trajectory.prose }
+      : brief.trajectory,
+    recommendation: prose.recommendation || brief.recommendation,
   };
 }
 

@@ -23,11 +23,13 @@ import {
   renderReportArgument,
   renderSupplierBrief,
   renderCategoryDeepDive,
+  applyGeneratedProse,
   lensVerdict,
   type RenderedSupplierBrief,
   type RenderedCategoryDeepDive,
 } from "@/lib/report-narrative";
 import type { ReportFocusData } from "@/lib/report-focus-types";
+import type { GeneratedBriefProse } from "@/lib/report-llm-types";
 import { buildClassificationAnomalies, buildAnomalyCrossref } from "@/lib/anomaly-crossref";
 import { deriveCycleFlags } from "@/lib/cycle-flags";
 import {
@@ -179,6 +181,8 @@ export function ReportDocument({
   config,
   supplierCategory,
   focusData = null,
+  generatedNarrative = null,
+  narrativeUnavailable = false,
   legacyCycle,
   embedded = false,
 }: {
@@ -191,6 +195,20 @@ export function ReportDocument({
    *  on the persisted path; fetched in the editor). Null for portfolio/category
    *  focus, or while the editor is still fetching it. */
   focusData?: ReportFocusData;
+  /**
+   * OPTIONAL LLM-generated narrative for a supplier brief (editor-only; never
+   * persisted). When present, its prose OVERLAYS the template brief's six strings —
+   * every number/table/classification stays as computed. Null everywhere else, so
+   * the persisted /reports/[id] path always renders the template narrative.
+   */
+  generatedNarrative?: {
+    prose: GeneratedBriefProse;
+    model: string;
+    inputsHash: string;
+  } | null;
+  /** True when a generation attempt ran and degraded (missing key / error / timeout)
+   *  — the template renders and a visible note explains the fallback. */
+  narrativeUnavailable?: boolean;
   /**
    * Set only for reports persisted before Batch 5 (no `cycle_framing` marker):
    * the stored pre/post automation cycle narrative. When present, the cycle
@@ -243,6 +261,13 @@ export function ReportDocument({
     config.focus.kind === "supplier" && config.focus.supplierId
       ? renderSupplierBrief(analyses, supplierFocusData, config.focus.supplierId, tone)
       : null;
+  // Overlay the optional LLM narrative (editor-only) onto the template brief — the
+  // tables and every number stay as computed. The template stands when no narrative
+  // is present (persisted path, no key, or before Generate).
+  const briefForView: RenderedSupplierBrief | null =
+    supplierBrief && generatedNarrative
+      ? applyGeneratedProse(supplierBrief, generatedNarrative.prose)
+      : supplierBrief;
   const categoryDeepDive: RenderedCategoryDeepDive | null =
     config.focus.kind === "category" && config.focus.category
       ? renderCategoryDeepDive(analyses, config.focus.category, supplierCategory, tone)
@@ -576,15 +601,24 @@ export function ReportDocument({
 
         {/* FOCUS: supplier brief / category deep-dive (replaces the portfolio
             argument when focus narrows). */}
-        {supplierBrief && (
+        {briefForView && (
           <SupplierBriefView
-            brief={supplierBrief}
+            brief={briefForView}
             meta={meta}
             isBriefLength={brief}
             detailed={detailed}
             loadingDetail={focusLoadingDetail}
             showMethodology={showMethodology}
             methodologyText={T.methodology(ctx)}
+            narrative={
+              generatedNarrative
+                ? {
+                    model: generatedNarrative.model,
+                    inputsHash: generatedNarrative.inputsHash,
+                  }
+                : null
+            }
+            narrativeUnavailable={narrativeUnavailable}
           />
         )}
         {categoryDeepDive && (
@@ -1330,7 +1364,16 @@ function MethodologyBlock({ text }: { text: string }) {
 // Config provenance stamp — the frozen record on a printed focus report. Ties the
 // scores on the page to the exact risk-model configuration that produced them, so a
 // printout is reproducible from its version + content fingerprint.
-function ReportConfigStamp({ meta }: { meta: ReportMeta }) {
+function ReportConfigStamp({
+  meta,
+  narrative,
+}: {
+  meta: ReportMeta;
+  /** Narrative provenance. Omitted (e.g. category deep-dive) → no narrative line. */
+  narrative?:
+    | { mode: "template" }
+    | { mode: "generated"; model: string; inputsHash: string };
+}) {
   const stamp = meta.configStamp;
   return (
     <section className="mt-2 flex break-inside-avoid flex-col gap-1 border-t pt-3 text-xs text-muted-foreground">
@@ -1343,12 +1386,31 @@ function ReportConfigStamp({ meta }: { meta: ReportMeta }) {
       </p>
       <p>
         The weights that produced these scores are an organisational configuration, not
-        fixed constants. This report is reproducible from the schema version, composite
-        versions and the whole-config fingerprint above; a fingerprint is only comparable
-        within the same schema version (the version records the fingerprint&apos;s
-        compute-affecting scope). A different configuration can move the quadrant and zone
-        labels.
+        fixed constants. The scores and figures in this report are reproducible from the
+        schema version, composite versions and the whole-config fingerprint above; a
+        fingerprint is only comparable within the same schema version (the version records
+        the fingerprint&apos;s compute-affecting scope). A different configuration can move
+        the quadrant and zone labels.
       </p>
+      {narrative &&
+        (narrative.mode === "generated" ? (
+          <p>
+            Narrative &mdash; the prose of this brief was generated by{" "}
+            <span className="text-foreground">{narrative.model}</span> (inputs{" "}
+            <span className="tabular-nums">{narrative.inputsHash}</span>) from the computed
+            values above; those figures were supplied to the model, which does not compute
+            or alter them. The inputs hash covers the whole request — model, instruction,
+            and the supplier&apos;s computed values — so it identifies this generation, not
+            just the instruction. Generation is non-deterministic and the prose is not
+            stored: this printed report is the record, and a regenerated brief will read
+            differently even from identical numbers.
+          </p>
+        ) : (
+          <p>
+            Narrative &mdash; written from a fixed template (automated generation not
+            used).
+          </p>
+        ))}
     </section>
   );
 }
@@ -1361,6 +1423,8 @@ function SupplierBriefView({
   loadingDetail,
   showMethodology,
   methodologyText,
+  narrative = null,
+  narrativeUnavailable = false,
 }: {
   brief: RenderedSupplierBrief;
   meta: ReportMeta;
@@ -1369,6 +1433,10 @@ function SupplierBriefView({
   loadingDetail: boolean;
   showMethodology: boolean;
   methodologyText: string;
+  /** Provenance of the rendered prose: present = LLM-generated, null = template. */
+  narrative?: { model: string; inputsHash: string } | null;
+  /** A generation attempt ran and degraded — show the fallback note. */
+  narrativeUnavailable?: boolean;
 }) {
   const showTables = !isBriefLength; // item/trajectory tables at standard/full
   const buy = brief.buy;
@@ -1383,6 +1451,13 @@ function SupplierBriefView({
         meta={meta}
         headline={brief.headline}
       />
+
+      {narrativeUnavailable && (
+        <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+          Automated narrative was unavailable, so this brief uses the standard
+          written summary. The figures are unchanged.
+        </p>
+      )}
 
       <BriefSection id="situation" title="The situation">
         {brief.situation.map((p, i) => (
@@ -1492,7 +1567,10 @@ function SupplierBriefView({
       </BriefSection>
 
       {showMethodology && <MethodologyBlock text={methodologyText} />}
-      <ReportConfigStamp meta={meta} />
+      <ReportConfigStamp
+        meta={meta}
+        narrative={narrative ? { mode: "generated", ...narrative } : { mode: "template" }}
+      />
     </>
   );
 }
