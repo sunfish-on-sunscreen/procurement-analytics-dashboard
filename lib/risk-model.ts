@@ -548,7 +548,13 @@ export function nextVersion(current: string): string {
   return "1.0.1";
 }
 
-/** A minimal per-composite edit payload (id + component enabled/weight). */
+/** A minimal per-composite edit payload (id + component enabled/weight).
+ *
+ * The `components` array is AUTHORITATIVE for a composite's NON-BUILTIN components (Stage I):
+ * an id present in the edit but absent from the on-disk composite is an ADD; a non-builtin id
+ * present on disk but absent from the edit is a REMOVE. Built-in sub-scores are never added or
+ * removed — they are preserved from the on-disk config regardless of the edit (a client never
+ * omits them, but the merge does not rely on that). See mergeAndBumpVersions. */
 export interface CompositeEdit {
   id: string;
   components: {
@@ -559,50 +565,210 @@ export interface CompositeEdit {
      * never applies a formula/bounds edit to a builtin — its formula is a scores.py column). */
     formula?: string;
     bounds?: FormulaBounds;
+    /** Stage I: display name for an ADDED component, or a RENAME of a custom component. Applied
+     * only to non-builtin components (shipped labels are authored copy tied to the Methodology
+     * page and stay fixed). Display-only — NOT in the compute-affecting fingerprint, so a rename
+     * never moves a score's fingerprint. */
+    label?: string;
   }[];
 }
 
+/** The prefix every ORGANISATION-ADDED component id carries (Stage I). Shipped component ids
+ * never carry it, so an org-added component can never collide with a component this project ships
+ * later, and provenance (shipped default vs organisational calibration) is visible in a config
+ * diff and git history. It also guarantees a custom id can never be a reserved formula function
+ * name (min/max/abs/sqrt). */
+export const CUSTOM_COMPONENT_PREFIX = "custom_";
+
+/** True for an organisation-added component (Stage I) — detected by the id prefix, the single
+ * machine-readable provenance marker (no separate `custom` flag to drift out of sync). */
+export function isCustomComponentId(id: string): boolean {
+  return id.startsWith(CUSTOM_COMPONENT_PREFIX);
+}
+
+/** Max length of the SLUG body of a generated id — the `custom_` prefix and a numeric collision
+ * suffix are additional. Truncation removes slug characters only, never the prefix. */
+export const MAX_COMPONENT_SLUG_LEN = 40;
+
 /**
- * Merge weight/enabled (+ Stage F: formula/bounds on non-builtin components) edits into the
- * current config and bump the version of ONLY the composites whose own components actually
- * changed — saving one composite must never bump another. Returns the merged model + the ids
- * that changed. Pure; the route does the file write + recompute. schemaVersion and all display
- * fields are preserved. A formula/bounds edit on a BUILTIN component is ignored (its formula is
- * a scores.py column, not editable — the UI never offers it and the route rejects it upstream).
+ * Slugify a display name to the ASCII snake_case body of a component id (Stage I): strip accents
+ * (NFKD), lowercase, non-alphanumeric -> underscore (repeats collapsed), trim underscores, cap
+ * length. May return "" for a name of only punctuation or non-Latin script — generateComponentId
+ * substitutes a random token in that case rather than failing. Pure.
+ */
+export function slugifyComponentName(name: string): string {
+  const ascii = (name ?? "").normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
+  let slug = ascii.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (slug.length > MAX_COMPONENT_SLUG_LEN) {
+    slug = slug.slice(0, MAX_COMPONENT_SLUG_LEN).replace(/_+$/g, "");
+  }
+  return slug;
+}
+
+/**
+ * Generate a stable, read-only component id from a display name (Stage I): `custom_` + slug, with
+ * a numeric collision suffix (_2, _3, …) checked against EVERY existing component id in the config
+ * (all composites, not just the target). If the name slugifies to empty, `randomToken` seeds the
+ * body rather than failing (the server route passes a real random token; tests pass a fixed one so
+ * this function stays pure and deterministic in its inputs). The id FREEZES at creation and never
+ * changes — including on rename, so id and label deliberately diverge after a rename. Generated
+ * server-side (the route reads the on-disk config for the authoritative id set) and re-validated
+ * there on save.
+ *
+ *   "Delivery variance"   -> custom_delivery_variance
+ *   "Price premium" (2nd) -> custom_price_premium_2
+ */
+export function generateComponentId(
+  displayName: string,
+  existingIds: Iterable<string>,
+  randomToken?: string,
+): string {
+  let slug = slugifyComponentName(displayName);
+  if (!slug) {
+    const seed = (randomToken ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+    slug = (seed || "x").slice(0, MAX_COMPONENT_SLUG_LEN);
+  }
+  const base = `${CUSTOM_COMPONENT_PREFIX}${slug}`;
+  const taken = new Set(existingIds);
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}_${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * The config sites that REFERENCE a component id (Stage I orphan guard for remove): a component's
+ * `configuredIn` pointing at it, or ANOTHER component's formula referencing it as a variable.
+ * Returns readable "compositeId.componentId (via …)" strings; empty means safe to remove.
+ *
+ * ⚠️ VACUOUS ON TODAY'S DATA MODEL — stated, not hidden. `configuredIn` holds COMPOSITE ids
+ * (e.g. performanceRisk), never a component id; and every identifier in a formula must be a
+ * catalogue VARIABLE (formulaError rejects anything else), so a component id that is not also a
+ * catalogue variable can never appear in a formula — and custom ids carry the `custom_` prefix,
+ * which no catalogue variable does. The check is implemented as specified so a future data-model
+ * change that lets a component be referenced is caught rather than silently orphaning; on the
+ * current config it never fires.
+ */
+export function componentReferrers(componentId: string, composites: RiskComposite[]): string[] {
+  const out: string[] = [];
+  for (const composite of composites) {
+    for (const comp of composite.components) {
+      if (comp.configuredIn === componentId) out.push(`${composite.id}.${comp.id} (configuredIn)`);
+      if (
+        comp.id !== componentId &&
+        comp.formula &&
+        referencedVariables(comp.formula).includes(componentId)
+      ) {
+        out.push(`${composite.id}.${comp.id} (formula)`);
+      }
+    }
+  }
+  return out;
+}
+
+/** Build a fresh RiskComponent from an ADD edit (Stage I). Display metadata (label / definition /
+ * provenance) is NOT compute-affecting, so none of it enters the fingerprint; provenance is
+ * DERIVED from the formula (never entered), matching the editor's live badge. */
+function newComponentFromEdit(
+  e: CompositeEdit["components"][number],
+  variables: CatalogueVariables,
+): RiskComponent {
+  return {
+    id: e.id,
+    label: e.label ?? e.id,
+    definition: "Organisation-added risk component.",
+    provenance: deriveProvenance(e.formula ?? "", variables),
+    enabled: e.enabled,
+    weight: e.weight,
+    formula: e.formula ?? "",
+    bounds: e.bounds ?? { lo: 0, hi: 100 },
+  };
+}
+
+/**
+ * Merge weight/enabled/formula/bounds edits into the current config, plus (Stage I) ADD and REMOVE
+ * of non-builtin components and RENAME of custom ones, and bump the version of ONLY the composites
+ * whose own components actually changed — saving one composite must never bump another. Returns the
+ * merged model + the ids that changed. Pure; the route does the file write + recompute.
+ * schemaVersion is preserved.
+ *
+ * The edit's component list is AUTHORITATIVE for a composite's NON-BUILTIN components: an id in the
+ * edit but not on disk is APPENDED (add); a non-builtin id on disk but not in the edit is DROPPED
+ * (remove). Built-in sub-scores are ALWAYS preserved (never added/removed, formula never applied —
+ * it is a scores.py column) regardless of the edit.
+ *
+ * ⚠️ ORDER IS PART OF THE IDENTITY. Surviving components keep their on-disk order (Python sums in
+ * config order, and float summation order is load-bearing for byte-identical output); a removed
+ * component simply leaves a gap the survivors close WITHOUT reordering, and a new component is
+ * APPENDED last. At the default config (no add/remove/rename) the output is byte-identical to the
+ * pre-Stage-I merge.
  */
 export function mergeAndBumpVersions(
   current: RiskModel,
   edits: CompositeEdit[],
 ): { merged: RiskModel; changedIds: string[] } {
+  const variables = current.variables ?? {};
   const editById = new Map(
     edits.map((e) => [e.id, new Map(e.components.map((c) => [c.id, c]))]),
   );
+  const editOrderById = new Map(edits.map((e) => [e.id, e.components]));
   const changedIds: string[] = [];
   const composites = current.composites.map((composite) => {
     const compEdits = editById.get(composite.id);
     if (!compEdits) return composite;
     let changed = false;
-    const components = composite.components.map((comp) => {
+    const currentIds = new Set(composite.components.map((c) => c.id));
+
+    // 1. Walk on-disk components IN ORDER. Apply edits; DROP a non-builtin absent from the edit
+    //    (remove); ALWAYS keep a builtin (never add/remove/formula-edit it).
+    const kept: RiskComponent[] = [];
+    for (const comp of composite.components) {
       const e = compEdits.get(comp.id);
-      if (!e) return comp;
+      if (comp.builtin) {
+        if (e && (e.enabled !== comp.enabled || e.weight !== comp.weight)) {
+          kept.push({ ...comp, enabled: e.enabled, weight: e.weight });
+          changed = true;
+        } else {
+          kept.push(comp);
+        }
+        continue;
+      }
+      if (!e) {
+        changed = true; // REMOVE — non-builtin omitted from the authoritative edit list
+        continue;
+      }
       const next: RiskComponent = { ...comp, enabled: e.enabled, weight: e.weight };
       if (e.enabled !== comp.enabled || e.weight !== comp.weight) changed = true;
-      // Formula + bounds are editable ONLY on formula-defined (non-builtin) components.
-      if (!comp.builtin) {
-        if (e.formula !== undefined && e.formula !== comp.formula) {
-          next.formula = e.formula;
-          changed = true;
-        }
-        if (
-          e.bounds !== undefined &&
-          (e.bounds.lo !== comp.bounds?.lo || e.bounds.hi !== comp.bounds?.hi)
-        ) {
-          next.bounds = { lo: e.bounds.lo, hi: e.bounds.hi };
-          changed = true;
-        }
+      if (e.formula !== undefined && e.formula !== comp.formula) {
+        next.formula = e.formula;
+        changed = true;
       }
-      return next;
-    });
+      if (
+        e.bounds !== undefined &&
+        (e.bounds.lo !== comp.bounds?.lo || e.bounds.hi !== comp.bounds?.hi)
+      ) {
+        next.bounds = { lo: e.bounds.lo, hi: e.bounds.hi };
+        changed = true;
+      }
+      // RENAME is allowed only on a CUSTOM component; shipped labels are authored copy and fixed.
+      if (e.label !== undefined && e.label !== comp.label && isCustomComponentId(comp.id)) {
+        next.label = e.label;
+        changed = true;
+      }
+      kept.push(next);
+    }
+
+    // 2. APPEND new components (edit ids not on disk) at the END, in edit order — a new term is
+    //    summed last, so surviving components' float summation order is untouched.
+    const appended: RiskComponent[] = [];
+    for (const e of editOrderById.get(composite.id) ?? []) {
+      if (currentIds.has(e.id)) continue;
+      appended.push(newComponentFromEdit(e, variables));
+      changed = true;
+    }
+
+    const components = [...kept, ...appended];
     if (!changed) return { ...composite, components };
     changedIds.push(composite.id);
     return { ...composite, components, version: nextVersion(composite.version) };

@@ -30,6 +30,9 @@ import {
   mergeAndBumpVersions,
   formulaError,
   boundsError,
+  generateComponentId,
+  isCustomComponentId,
+  componentReferrers,
   type RiskModel,
   type RiskComposite,
   type RiskComponent,
@@ -231,6 +234,89 @@ check("cost_premium partition edit moves the fingerprint", cfp(partEdit) !== bas
 const modeEdit = clone(RISK_MODEL);
 if (modeEdit.variables?.cost_premium?.partition) modeEdit.variables.cost_premium.partition.benchmarkMode = "external";
 check("cost_premium benchmarkMode edit moves the fingerprint", cfp(modeEdit) !== base);
+
+// O. Stage I — component ADD / REMOVE / RENAME + server-side id generation.
+// O.1 generateComponentId: prefixed slug, accent transliteration, collision suffix (from _2),
+//     cross-set collision, and the empty-slug -> token fallback.
+check("generateComponentId slugifies a name", generateComponentId("Delivery variance", []) === "custom_delivery_variance");
+check("generateComponentId transliterates accents", generateComponentId("Café variance", []) === "custom_cafe_variance");
+check(
+  "generateComponentId suffixes a collision from _2",
+  generateComponentId("Price premium", ["custom_price_premium"]) === "custom_price_premium_2",
+);
+check(
+  "generateComponentId falls back to a token for an empty slug",
+  generateComponentId("!!!", [], "AB12cd") === "custom_ab12cd",
+);
+check(
+  "isCustomComponentId true for custom_, false for shipped",
+  isCustomComponentId("custom_x") && !isCustomComponentId("cost_premium"),
+);
+
+// O.2 ADD moves the fingerprint + bumps the version + appends LAST (surviving order preserved).
+const addEdit = mergeAndBumpVersions(RISK_MODEL, [
+  {
+    id: "supplyRisk",
+    components: [
+      { id: "supply_concentration", enabled: true, weight: 0.4 },
+      { id: "cost_premium", enabled: true, weight: 0.25 },
+      { id: "import_friction", enabled: true, weight: 0.25 },
+      { id: "custom_delivery_variance", enabled: true, weight: 0.1, formula: "import_friction", bounds: { lo: 0, hi: 100 }, label: "Delivery variance" },
+    ],
+  },
+]);
+const srAdd = composite(addEdit.merged, "supplyRisk");
+check("ADD appends the new component", srAdd.components.length === 4 && srAdd.components.some((c) => c.id === "custom_delivery_variance"));
+check("ADD changed-length moves the config fingerprint + bumps supplyRisk", cfp(addEdit.merged) !== base && addEdit.changedIds.includes("supplyRisk"));
+check("ADD moves the supplyRisk composite fingerprint", kfp("supplyRisk", addEdit.merged) !== EXPECT_COMPOSITE_FP.supplyRisk);
+check(
+  "ADD preserves surviving component order (new one is LAST)",
+  srAdd.components.slice(0, 3).map((c) => c.id).join(",") === "supply_concentration,cost_premium,import_friction",
+);
+
+// O.3 REMOVE (a non-builtin omitted from the edit) drops it + moves the fingerprint.
+const rmEdit = mergeAndBumpVersions(RISK_MODEL, [
+  {
+    id: "supplyRisk",
+    components: [
+      { id: "supply_concentration", enabled: true, weight: 0.5 / 0.75 },
+      { id: "cost_premium", enabled: true, weight: 0.25 / 0.75 },
+    ],
+  },
+]);
+const srRm = composite(rmEdit.merged, "supplyRisk");
+check("REMOVE drops the omitted non-builtin", srRm.components.length === 2 && !srRm.components.some((c) => c.id === "import_friction"));
+check("REMOVE changed-length moves the fingerprint + bumps supplyRisk", cfp(rmEdit.merged) !== base && rmEdit.changedIds.includes("supplyRisk"));
+
+// O.4 RENAME: a label change on a CUSTOM component keeps the frozen id AND does NOT move the
+//     fingerprint (label is display-only, excluded from the projection). "create, rename, id unchanged".
+const afterAddFp = cfp(addEdit.merged);
+const renameEdit = mergeAndBumpVersions(addEdit.merged, [
+  {
+    id: "supplyRisk",
+    components: [
+      { id: "supply_concentration", enabled: true, weight: 0.4 },
+      { id: "cost_premium", enabled: true, weight: 0.25 },
+      { id: "import_friction", enabled: true, weight: 0.25 },
+      { id: "custom_delivery_variance", enabled: true, weight: 0.1, formula: "import_friction", bounds: { lo: 0, hi: 100 }, label: "Delivery consistency" },
+    ],
+  },
+]);
+const renamed = composite(renameEdit.merged, "supplyRisk").components.find((c) => c.id === "custom_delivery_variance");
+check("RENAME keeps the frozen id, diverging from the label", !!renamed && renamed.id === "custom_delivery_variance" && renamed.label === "Delivery consistency");
+check("RENAME does NOT move the fingerprint (label excluded)", cfp(renameEdit.merged) === afterAddFp, `${cfp(renameEdit.merged)} != ${afterAddFp}`);
+
+// O.5 Built-in components are PRESERVED even when an edit omits them (never removed), and omitting
+//     them with no knob change does not bump the version.
+const omitBuiltins = mergeAndBumpVersions(RISK_MODEL, [
+  { id: "performanceComposite", components: [{ id: "quality_score", enabled: true, weight: 0.3 }] },
+]);
+check("builtins are never dropped by an omitting edit", composite(omitBuiltins.merged, "performanceComposite").components.length === 4);
+check("omitting builtins with no knob change does NOT bump the version", !omitBuiltins.changedIds.includes("performanceComposite"));
+
+// O.6 componentReferrers is empty on the shipped config — nothing references a component id, so a
+//     non-builtin remove orphans nothing (vacuous by the data model; see the function's doc).
+check("componentReferrers empty for a shipped component", componentReferrers("cost_premium", RISK_MODEL.composites).length === 0);
 
 console.log(failures === 0 ? "\nALL FINGERPRINT CHECKS PASSED" : `\n${failures} FINGERPRINT CHECK(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);

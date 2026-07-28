@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ChevronDown, ChevronRight } from "lucide-react";
@@ -19,6 +19,9 @@ import {
   componentTableRefs,
   nextVersion,
   normalizeLookupTableEdit,
+  formulaError,
+  deriveProvenance,
+  isCustomComponentId,
   WEIGHT_SUM_TOL,
   RISK_MODEL_DEFAULTS,
   type RiskModel,
@@ -28,7 +31,9 @@ import {
   type LookupTableEdit,
   type LookupCoverageInputs,
   type FormulaBounds,
+  type CatalogueVariables,
 } from "@/lib/risk-model";
+import type { PreviewData, PreviewImpact } from "@/lib/preview-types";
 import { LookupTableCard } from "@/components/Methodology/LookupTableCard";
 import { FormulaEditorCard } from "@/components/Methodology/FormulaEditorCard";
 import { CostPremiumPartitionCard } from "@/components/Methodology/CostPremiumPartitionCard";
@@ -80,7 +85,7 @@ type Status = {
   error: string | null;
 };
 
-function statusOf(c: RiskComposite): Status {
+function statusOf(c: RiskComposite, all: RiskComposite[], variables: CatalogueVariables): Status {
   const hasNaN = c.components.some((x) => !Number.isFinite(x.weight));
   const enabled = c.components.filter((x) => x.enabled);
   const declaredSum = c.components.reduce(
@@ -96,11 +101,104 @@ function statusOf(c: RiskComposite): Status {
       declaredSum,
       error: `Declared weights must sum to 100% (currently ${(declaredSum * 100).toFixed(1)}%).`,
     };
+  // Stage I: an ENABLED formula-defined component with an empty/invalid formula blocks save —
+  // reusing formulaError (the SAME validation the editor and the save route use, not a new check),
+  // so a freshly-added component whose formula was never set greys out Save instead of 400-ing.
+  for (const comp of c.components) {
+    if (!comp.enabled || comp.builtin) continue;
+    const fe = formulaError(comp.formula ?? "", c.id, all, variables);
+    if (fe) return { effective: null, declaredSum, error: `${comp.label}: ${fe}` };
+  }
   try {
     return { effective: resolveEffectiveWeights(c), declaredSum, error: null };
   } catch (e) {
     return { effective: null, declaredSum, error: e instanceof Error ? e.message : "Invalid." };
   }
+}
+
+// The declared weights of `survivors` proportionally renormalized to sum to 1.0 — used when a
+// component is REMOVED so the remaining declared weights stay coherent (the sum-to-100% guard).
+// This is the SAME proportional renormalization resolveEffectiveWeights applies to the enabled
+// set on disable (each weight / the survivor total); removing a component therefore lands the
+// survivors on exactly the effective weights that disabling it would have. Full float precision
+// (no rounding) so the redistributed weights re-sum to 1.0 well within WEIGHT_SUM_TOL. When the
+// survivor total is 0 (all parked at 0), it leaves them unchanged and the guard flags it.
+function redistributeWeights(survivors: DraftComponent[]): DraftComponent[] {
+  const parsed = survivors.map((c) => Number.parseFloat(c.weightStr) || 0);
+  const total = parsed.reduce((s, w) => s + w, 0);
+  if (total <= 0) return survivors;
+  return survivors.map((c, i) => ({ ...c, weightStr: String(parsed[i] / total) }));
+}
+
+// Composite-level impact preview (Stage I): the Kraljic-quadrant / performance-zone churn if the
+// CURRENT draft composite (with its add / remove / reweight) were saved, computed by the SAME
+// read-only /api/risk-model/preview + python/preview.py the formula editor uses. Rendered only for
+// a formula-defined composite that is dirty AND valid (a builtin composite has no formulas to
+// evaluate; an invalid draft is gated out by the parent, so preview.py never sees an empty
+// formula). Debounced; a request id guards against out-of-order responses. setState happens only
+// in the async callback, never synchronously in the effect body (eslint bans that).
+function CompositeImpactPreview({ candidate }: { candidate: RiskComposite }) {
+  const [impact, setImpact] = useState<PreviewImpact | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const reqId = useRef(0);
+  const key = JSON.stringify(candidate);
+  useEffect(() => {
+    const id = (reqId.current += 1);
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const res = await fetch("/api/risk-model/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ composite: candidate }),
+        });
+        const data = (await res.json()) as PreviewData;
+        if (id !== reqId.current) return;
+        if ("error" in data) {
+          setError(data.error);
+          setImpact(null);
+        } else {
+          setImpact(data.impact);
+          setError(null);
+        }
+      } catch {
+        if (id === reqId.current) setError("Preview request failed.");
+      } finally {
+        if (id === reqId.current) setLoading(false);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+
+  return (
+    <div className="rounded-md border border-dashed p-2 text-xs">
+      <span className="font-medium text-foreground">
+        Impact if saved {loading && <span className="text-muted-foreground">(computing…)</span>}
+      </span>{" "}
+      {error ? (
+        <span className="text-destructive">{error}</span>
+      ) : impact ? (
+        <span className={impact.changed > 0 ? "text-foreground" : "text-muted-foreground"}>
+          {impact.changed} of {impact.total} suppliers change {impact.kind}
+          {impact.changed > 0 && impact.movers.length > 0 && (
+            <>
+              {" — "}
+              {impact.movers
+                .slice(0, 4)
+                .map((m) => `${m.supplier_id} ${m.from}→${m.to}`)
+                .join(", ")}
+              {impact.changed > 4 && ` +${impact.changed - 4} more`}
+            </>
+          )}
+          .
+        </span>
+      ) : (
+        <span className="text-muted-foreground">computing…</span>
+      )}
+    </div>
+  );
 }
 
 const pct = (w: number) => `${(w * 100).toFixed(1)}%`;
@@ -130,6 +228,11 @@ export function RiskModelSettings({
   const [errorById, setErrorById] = useState<Record<string, string | null>>({});
   // Stage F: which draft component's formula overlay is open ({composite index, component index}).
   const [formulaEdit, setFormulaEdit] = useState<{ ci: number; cj: number } | null>(null);
+  // Stage I: inline "add component" entry — which composite index is being added to, the typed
+  // display name, and whether the server-side id mint is in flight.
+  const [addingCi, setAddingCi] = useState<number | null>(null);
+  const [addName, setAddName] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
 
   const router = useRouter();
   // Phase 2 of the two-phase save: after ANY successful config save, auto-run the sensitivity
@@ -166,43 +269,65 @@ export function RiskModelSettings({
   }
 
   const parsed = draft.map(parse);
-  const statuses = parsed.map(statusOf);
+  const statuses = parsed.map((c) => statusOf(c, parsed, active.variables ?? {}));
   const configFp = configFingerprint(active.composites, active.lookupTables, active.variables ?? {});
 
-  // Per-composite dirty: any component's weight/enabled differs from the SAVED (active).
+  // Per-composite dirty: any component's weight/enabled/formula/bounds/label differs from the
+  // SAVED (active), OR a component was added/removed (the component id SET changed).
   function isDirty(i: number): boolean {
     const a = active.composites[i];
     if (!a) return true;
-    return draft[i].components.some((comp, j) => {
-      const ac = a.components[j];
+    const d = draft[i];
+    if (d.components.length !== a.components.length) return true;
+    const savedById = new Map(a.components.map((c) => [c.id, c]));
+    return d.components.some((comp) => {
+      const ac = savedById.get(comp.id);
       return (
-        !ac ||
+        !ac || // an added component (id not in the saved set)
         comp.enabled !== ac.enabled ||
         Number.parseFloat(comp.weightStr) !== ac.weight ||
         comp.formula !== ac.formula ||
         comp.bounds?.lo !== ac.bounds?.lo ||
-        comp.bounds?.hi !== ac.bounds?.hi
+        comp.bounds?.hi !== ac.bounds?.hi ||
+        comp.label !== ac.label
       );
     });
   }
 
-  // Is the SAVED composite already at its shipped defaults? (Reset is offered only when not.)
+  // Is the SAVED composite already at its shipped defaults — SAME component id set AND matching
+  // knobs? (Reset is offered only when not.) A removed shipped component or an added custom one
+  // changes the set length, so the length check catches both.
   function activeAtDefaults(i: number): boolean {
     const a = active.composites[i];
     const defs = RISK_MODEL_DEFAULTS.composites[a.id];
     if (!defs) return true;
+    if (a.components.length !== Object.keys(defs).length) return false;
     return a.components.every((c) => sameKnobs(c, defs[c.id]));
   }
 
-  // A composite whose knobs are the shipped defaults (for reset-to-defaults save).
+  // A shipped (default) component is MISSING from the saved composite — i.e. it was removed. Reset
+  // cannot restore it: the frozen reset target (risk-model.defaults.json) carries knobs only, not a
+  // removed component's formula/label/bounds, so a clean reset is impossible and Reset is disabled.
+  function shippedComponentsMissing(i: number): boolean {
+    const a = active.composites[i];
+    const defs = RISK_MODEL_DEFAULTS.composites[a.id];
+    if (!defs) return false;
+    const ids = new Set(a.components.map((c) => c.id));
+    return Object.keys(defs).some((id) => !ids.has(id));
+  }
+
+  // A composite reset to its shipped defaults: DROP added (custom) components and reset each
+  // shipped component's knobs. Only reachable when no shipped component is missing (guarded by
+  // shippedComponentsMissing), so the result is the exact default component set. Formula/bounds are
+  // not reset (defaults.json is knobs-only — a pre-existing limitation, unchanged by Stage I).
   function defaultComposite(i: number): RiskComposite {
     const a = active.composites[i];
     const defs = RISK_MODEL_DEFAULTS.composites[a.id] ?? {};
     return {
       ...a,
-      components: a.components.map((c) =>
-        defs[c.id] ? { ...c, enabled: defs[c.id].enabled, weight: defs[c.id].weight } : c,
-      ),
+      components: a.components
+        .filter((c) => defs[c.id])
+        .map((c) => ({ ...c, enabled: defs[c.id].enabled, weight: defs[c.id].weight })),
     };
   }
 
@@ -214,6 +339,62 @@ export function RiskModelSettings({
           : { ...c, components: c.components.map((x, j) => (j === cj ? { ...x, ...patch } : x)) },
       ),
     );
+  }
+
+  // Stage I: mint a server-side `custom_` id for a new component, append it to the draft (weight 0,
+  // enabled, empty formula), and open the formula editor on it immediately. The name is entered
+  // first because the id derives from it. Every existing draft id (all composites, incl. pending
+  // adds) is sent so the collision suffix is correct before the first save.
+  async function addComponent(ci: number, displayName: string) {
+    const name = displayName.trim();
+    if (!name) return;
+    setAddBusy(true);
+    try {
+      const existingIds = draft.flatMap((d) => d.components.map((c) => c.id));
+      const res = await fetch("/api/risk-model/component-id", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ displayName: name, existingIds }),
+      });
+      const data = (await res.json()) as { id?: string; error?: string };
+      if (!res.ok || !data.id) {
+        toast.error(data.error ?? "Could not generate a component id.");
+        return;
+      }
+      const newComp: DraftComponent = {
+        id: data.id,
+        label: name,
+        definition: "Organisation-added risk component.",
+        provenance: "lookup",
+        enabled: true,
+        weightStr: "0",
+        formula: "",
+        bounds: { lo: 0, hi: 100 },
+      };
+      const cj = draft[ci].components.length;
+      setDraft((prev) =>
+        prev.map((d, i) => (i === ci ? { ...d, components: [...d.components, newComp] } : d)),
+      );
+      setAddingCi(null);
+      setAddName("");
+      setFormulaEdit({ ci, cj });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Network error.");
+    } finally {
+      setAddBusy(false);
+    }
+  }
+
+  // Stage I: remove a non-builtin component and proportionally renormalize the survivors' declared
+  // weights back to 100% (the same renorm disabling relies on — see redistributeWeights). Closes
+  // the formula overlay if it was open on this composite (row indices shift on removal).
+  function removeComponent(ci: number, cj: number) {
+    setDraft((prev) =>
+      prev.map((d, i) =>
+        i !== ci ? d : { ...d, components: redistributeWeights(d.components.filter((_, j) => j !== cj)) },
+      ),
+    );
+    setFormulaEdit((f) => (f && f.ci === ci ? null : f));
   }
 
   function toggleOpen(id: string) {
@@ -240,9 +421,11 @@ export function RiskModelSettings({
               id: x.id,
               enabled: x.enabled,
               weight: x.weight,
-              // Formula + bounds are sent only for formula-defined components; the server rejects
-              // a formula edit on a builtin sub-score anyway.
-              ...(x.builtin ? {} : { formula: x.formula, bounds: x.bounds }),
+              // Formula + bounds + label are sent only for formula-defined components; the server
+              // rejects a formula edit on a builtin, and applies a label only to a custom component
+              // (a shipped label is fixed). An ADDED component's id is absent on disk → the server
+              // appends it; a non-builtin id absent here → the server removes it.
+              ...(x.builtin ? {} : { formula: x.formula, bounds: x.bounds, label: x.label }),
             })),
           },
         ],
@@ -378,7 +561,11 @@ export function RiskModelSettings({
           const saving = savingId === composite.id;
           const busy = savingId !== null;
           const compositeFp = compositeFingerprint(composite.id, active.composites, active.lookupTables, active.variables ?? {});
-          const canReset = !activeAtDefaults(ci);
+          // Add is offered only on a composite of formula-defined components (no built-ins) —
+          // driven off the builtin flag, never a composite-id check.
+          const addEligible = composite.components.every((c) => !c.builtin);
+          const removedShipped = shippedComponentsMissing(ci);
+          const canReset = !activeAtDefaults(ci) && !removedShipped;
           const confirming = confirmingResetId === composite.id;
           const err = errorById[composite.id];
           return (
@@ -446,19 +633,37 @@ export function RiskModelSettings({
                         </Button>
 
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span
-                              className={cn(
-                                "font-medium",
-                                comp.enabled ? "text-foreground" : "text-muted-foreground",
-                              )}
-                            >
-                              {comp.label}
-                            </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {isCustomComponentId(comp.id) ? (
+                              // A custom component's display name is editable (rename); its id is
+                              // frozen at creation and never changes, so id and label may diverge.
+                              <Input
+                                type="text"
+                                value={comp.label}
+                                disabled={busy}
+                                onChange={(e) => setComponent(ci, cj, { label: e.target.value })}
+                                className="h-7 w-48 font-medium"
+                                aria-label={`${comp.id} display name`}
+                              />
+                            ) : (
+                              <span
+                                className={cn(
+                                  "font-medium",
+                                  comp.enabled ? "text-foreground" : "text-muted-foreground",
+                                )}
+                              >
+                                {comp.label}
+                              </span>
+                            )}
                             <Badge variant={comp.provenance === "computed" ? "secondary" : "outline"}>
                               {comp.provenance}
                             </Badge>
                             {comp.builtin && <Badge variant="outline">built-in</Badge>}
+                            {isCustomComponentId(comp.id) && (
+                              <Badge variant="secondary" className="font-mono text-xs">
+                                {comp.id}
+                              </Badge>
+                            )}
                           </div>
                           <p className="mt-0.5 text-xs text-muted-foreground">{comp.definition}</p>
                           {producer && (
@@ -495,6 +700,21 @@ export function RiskModelSettings({
                               >
                                 Edit formula
                               </Button>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                className="text-destructive"
+                                disabled={busy || composite.components.length <= 1}
+                                onClick={() => removeComponent(ci, cj)}
+                                title={
+                                  composite.components.length <= 1
+                                    ? "A composite must keep at least one component"
+                                    : "Remove this component and renormalize the rest to 100%"
+                                }
+                              >
+                                Remove
+                              </Button>
                             </div>
                           )}
                         </div>
@@ -522,10 +742,68 @@ export function RiskModelSettings({
                     );
                   })}
 
+                  {/* Add a component — formula-defined composites only (built-in sub-scores can
+                      neither be added nor expressed as formulas). Name first (the id derives from
+                      it); the id is minted server-side and shown read-only. */}
+                  {addEligible &&
+                    (addingCi === ci ? (
+                      <div className="flex flex-wrap items-center gap-2 border-t pt-3">
+                        <Input
+                          type="text"
+                          value={addName}
+                          disabled={addBusy || busy}
+                          placeholder="New component name"
+                          onChange={(e) => setAddName(e.target.value)}
+                          className="w-56"
+                          aria-label="New component name"
+                        />
+                        <Button
+                          type="button"
+                          size="sm"
+                          disabled={!addName.trim() || addBusy || busy}
+                          onClick={() => addComponent(ci, addName)}
+                        >
+                          {addBusy ? "Creating…" : "Create & edit formula"}
+                        </Button>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          disabled={addBusy}
+                          onClick={() => {
+                            setAddingCi(null);
+                            setAddName("");
+                          }}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="self-start"
+                        disabled={busy}
+                        onClick={() => {
+                          setAddingCi(ci);
+                          setAddName("");
+                        }}
+                      >
+                        + Add component
+                      </Button>
+                    ))}
+
                   {status.error && (
                     <p className="text-xs font-medium text-destructive">{status.error}</p>
                   )}
                   {err && <p className="text-xs font-medium text-destructive">{err}</p>}
+
+                  {/* Impact preview before save (Stage I) — quadrant/zone churn of the whole draft
+                      composite (add / remove / reweight), for a valid formula-defined composite. */}
+                  {addEligible && dirty && !status.error && (
+                    <CompositeImpactPreview candidate={parsed[ci]} />
+                  )}
 
                   {/* Per-composite controls: Save + Discard (this composite only), and
                       Reset to defaults (a confirmed save back to the shipped values). */}
@@ -555,9 +833,11 @@ export function RiskModelSettings({
                         onClick={() => setConfirmingResetId(composite.id)}
                         disabled={!canReset || busy}
                         title={
-                          canReset
-                            ? "Restore this composite's shipped default weights"
-                            : "Already at the shipped defaults"
+                          removedShipped
+                            ? "Reset can't restore a removed shipped component — re-import the dataset to restore the full default set"
+                            : canReset
+                              ? "Restore this composite's shipped default components and weights"
+                              : "Already at the shipped defaults"
                         }
                       >
                         Reset to defaults
@@ -669,7 +949,7 @@ export function RiskModelSettings({
           fingerprint {configFp}
         </p>
         {active.composites.map((composite) => {
-          const eff = statusOf(composite).effective ?? {};
+          const eff = statusOf(composite, active.composites, active.variables ?? {}).effective ?? {};
           return (
             <div key={composite.id} className="mt-2">
               <p className="text-sm font-medium text-foreground">
@@ -764,7 +1044,13 @@ export function RiskModelSettings({
               initialFormula={comp.formula ?? comp.id}
               initialBounds={initialBounds}
               onApply={(formula, bounds) => {
-                setComponent(formulaEdit.ci, formulaEdit.cj, { formula, bounds });
+                // Keep the provenance badge honest — it is DERIVED from the formula (the server
+                // re-derives the same on save), so a new component shows computed/lookup correctly.
+                setComponent(formulaEdit.ci, formulaEdit.cj, {
+                  formula,
+                  bounds,
+                  provenance: deriveProvenance(formula, active.variables ?? {}),
+                });
                 setFormulaEdit(null);
               }}
               onClose={() => setFormulaEdit(null)}

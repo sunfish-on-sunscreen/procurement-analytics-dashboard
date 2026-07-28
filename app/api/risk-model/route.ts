@@ -13,6 +13,8 @@ import {
   formulaError,
   boundsError,
   buildConfigStamp,
+  isCustomComponentId,
+  componentReferrers,
 } from "@/lib/risk-model";
 import { readRiskModel, writeRiskModel } from "@/lib/risk-model-server";
 
@@ -39,6 +41,8 @@ const Body = z
                 // edit aimed at a builtin sub-score below).
                 formula: z.string().optional(),
                 bounds: z.object({ lo: z.number().finite(), hi: z.number().finite() }).optional(),
+                // Stage I: display name for an ADDED component, or a RENAME of a custom one.
+                label: z.string().optional(),
               }),
             )
             .min(1),
@@ -112,6 +116,44 @@ export async function POST(request: Request) {
   const current = await readRiskModel();
   let merged = current;
   const changedIds: string[] = [];
+
+  // Stage I: gate component ADD / REMOVE against the on-disk composite BEFORE merging. The edit's
+  // component list is authoritative for a composite's NON-BUILTIN components, so an id not on disk
+  // is an ADD and a non-builtin id on disk but absent from the edit is a REMOVE. Adds are allowed
+  // only on a composite with no built-in sub-scores (drive off the builtin flag, not an id check)
+  // and only with a generated `custom_` id; a remove is blocked if anything still references it.
+  for (const ce of parsed.data.composites ?? []) {
+    const cur = current.composites.find((c) => c.id === ce.id);
+    if (!cur) continue; // unknown composite — the merge ignores it
+    const curIds = new Set(cur.components.map((c) => c.id));
+    const editIds = new Set(ce.components.map((c) => c.id));
+    const addEligible = cur.components.every((c) => !c.builtin);
+    for (const c of ce.components) {
+      if (curIds.has(c.id)) continue; // an ADD
+      if (!addEligible) {
+        return NextResponse.json(
+          { error: `${ce.id}: components cannot be added to a composite of built-in sub-scores.` },
+          { status: 400 },
+        );
+      }
+      if (!isCustomComponentId(c.id)) {
+        return NextResponse.json(
+          { error: `${ce.id}.${c.id}: an added component id must be generated (start with "custom_").` },
+          { status: 400 },
+        );
+      }
+    }
+    for (const comp of cur.components) {
+      if (comp.builtin || editIds.has(comp.id)) continue; // builtins never removed; kept ones stay
+      const referrers = componentReferrers(comp.id, current.composites);
+      if (referrers.length > 0) {
+        return NextResponse.json(
+          { error: `${ce.id}.${comp.id} cannot be removed — referenced by ${referrers.join(", ")}.` },
+          { status: 400 },
+        );
+      }
+    }
+  }
 
   // Composite weight/enabled edits: bump only the composites whose own components changed.
   if (parsed.data.composites?.length) {
