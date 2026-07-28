@@ -435,11 +435,16 @@ export default async function MethodologyPage() {
             <p>
               Missing inputs are resolved <strong>asymmetrically</strong>, and the
               asymmetry is deliberate rather than an oversight, so it is stated plainly. A
-              missing <strong>cost premium</strong> resolves to <strong>neutral (0)</strong>
-              : a supplier with no qualifying item benchmark — because its items are
-              single-source, or it never bought the same item twice — scores 0 on that
-              component, exactly as an at-or-below-market supplier does. It is treated as
-              &ldquo;no evidence of overpricing&rdquo;, not as a penalty. An{" "}
+              missing <strong>cost premium</strong> is handled at two distinct levels. An
+              individual item with no comparator — a single-source item, or one the supplier
+              bought only once — is <strong>excluded</strong> from that supplier&apos;s
+              spend-weighted average, dropped from both its numerator and denominator: an
+              item that was never measured carries no information, so it carries no weight,
+              rather than being diluted to 0 (which would assert the supplier is at market on
+              an item never priced). Only when a supplier has <em>no</em> qualifying item at
+              all does the component fall back to <strong>0</strong> — treated as
+              &ldquo;no evidence of overpricing&rdquo;, not a penalty, the same value an
+              at-or-below-market supplier scores. An{" "}
               <strong>unknown country</strong>, by contrast, resolves to{" "}
               <strong>maximum risk</strong> — <code>country_distance → 100</code> and{" "}
               <code>import_friction → 25</code>, the explicit safe defaults for
@@ -1075,12 +1080,18 @@ export default async function MethodologyPage() {
                 suppliers selling it in the period. A supplier&apos;s item premium ={" "}
                 <code>supplier_avg_unit_price / item_avg − 1</code>, counted only
                 when that supplier×item has <strong>≥2 POs</strong>{" "}
-                (n=1 excluded as noise) and the item has ≥2 suppliers (single-source items have no
-                benchmark → neutral). The supplier&apos;s overall premium is the
-                spend-weighted average of its qualifying item premiums; points ={" "}
+                (n=1 excluded as noise) and the item has ≥2 suppliers. A single-source
+                item — one no other supplier sells — has no peer to price against, so by
+                default it is <strong>excluded</strong> from the average, dropped from both
+                the numerator and the denominator, rather than scored 0: an item that was
+                never measured carries no information, so it carries no weight. The
+                supplier&apos;s overall premium is the spend-weighted average of its
+                qualifying item premiums; points ={" "}
                 <code>clip(premium × 62.5, 0, 25)</code> — so +8% → 5, +20% → 12.5,
-                +40%+ → 25; at or below market → <code>0</code> (never negative).
-                Suppliers with no qualifying items score <code>0</code>.
+                +40%+ → 25; at or below market → <code>0</code> (never negative). A supplier
+                with <em>no</em> qualifying item at all falls back to <code>0</code> on the
+                component — a supplier-level default meaning &ldquo;not measured&rdquo;,
+                distinct from the measured <code>0</code> of an at-or-below-market supplier.
               </li>
               <li>
                 <strong>Import friction</strong> (≤25) — reflects Indonesia&apos;s{" "}
