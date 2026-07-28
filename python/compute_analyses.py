@@ -1184,6 +1184,24 @@ def _cost_premium_params():
         return dict(_COST_PREMIUM_DEFAULTS)
 
 
+def load_reference_prices_if_needed(conn):
+    """{item_name -> unit_price} from ReferencePrice — but ONLY when cost_premium's benchmark mode
+    is external/hybrid (else None). At the default 'internal' mode this returns None and the
+    reference table is never read, so the default scoring path is byte-unchanged. Sets the module
+    global that _cost_premium_general reads for external/hybrid benchmarks."""
+    try:
+        mode = _cost_premium_params().get("benchmarkMode", "internal")
+    except Exception:  # noqa: BLE001
+        mode = "internal"
+    if mode not in ("external", "hybrid"):
+        return None
+    cur = conn.cursor()
+    cur.execute('SELECT "itemName", "unitPriceUsd" FROM "ReferencePrice"')
+    prices = {str(r[0]): float(r[1]) for r in cur.fetchall()}
+    cur.close()
+    return prices
+
+
 def _cost_premium_points(purchases, params=None):
     """Cost premium NORMALIZED to 0..100 per supplier (Stage G: partition-parameterised).
 
@@ -2490,6 +2508,13 @@ def main():
         global _PO_LINES
         _PO_LINES = load_po_lines(conn, start_ts, end_ts)
         log(f"Loaded {len(_PO_LINES)} PO lines (for cost-premium benchmarking)")
+
+        # Stage G: external reference prices for cost_premium's external/hybrid benchmark mode.
+        # None at the default 'internal' mode, so cost_premium is byte-unchanged.
+        global _REFERENCE_PRICES
+        _REFERENCE_PRICES = load_reference_prices_if_needed(conn)
+        if _REFERENCE_PRICES is not None:
+            log(f"Loaded {len(_REFERENCE_PRICES)} external reference prices")
 
         results = {}
         for name, fn in ANALYSES:

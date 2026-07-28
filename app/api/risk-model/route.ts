@@ -62,10 +62,22 @@ const Body = z
         }),
       )
       .optional(),
+    // Stage G: the cost_premium partition parameters (compute-affecting config).
+    costPremiumPartition: z
+      .object({
+        key: z.enum(["item", "item_period", "item_category"]),
+        benchmarkStat: z.enum(["spend_weighted_mean", "mean", "median"]),
+        minGroupMembers: z.number().int().min(1),
+        minPosPerSupplierItem: z.number().int().min(1),
+        belowMinimum: z.enum(["excluded", "neutral"]),
+        benchmarkMode: z.enum(["internal", "external", "hybrid"]),
+      })
+      .optional(),
   })
-  .refine((b) => (b.composites?.length ?? 0) + (b.lookupTables?.length ?? 0) > 0, {
-    message: "Nothing to save.",
-  });
+  .refine(
+    (b) => (b.composites?.length ?? 0) + (b.lookupTables?.length ?? 0) + (b.costPremiumPartition ? 1 : 0) > 0,
+    { message: "Nothing to save." },
+  );
 
 /**
  * Save the risk-model weights (any authenticated user — configuration is unrestricted
@@ -119,6 +131,19 @@ export async function POST(request: Request) {
     const r = mergeAndBumpTableVersions(merged, normalized);
     merged = r.merged;
     changedIds.push(...r.changedIds);
+  }
+
+  // Cost-premium partition edit (Stage G): overwrite variables.cost_premium.partition. Variables
+  // are not versioned; the whole-config fingerprint carries the effect (partition is
+  // compute-affecting). The Python load-time validator re-checks the enum/int values.
+  if (parsed.data.costPremiumPartition) {
+    const vars = { ...(merged.variables ?? {}) };
+    const cp = vars.cost_premium;
+    if (cp) {
+      vars.cost_premium = { ...cp, partition: parsed.data.costPremiumPartition };
+      merged = { ...merged, variables: vars };
+      changedIds.push("cost_premium.partition");
+    }
   }
 
   // Validate every composite: declared weights sum to 1.0, and at least one enabled.

@@ -468,6 +468,24 @@ model SensitivityResult {
   resultJson        Json
 }
 
+// ============= EXTERNAL REFERENCE PRICES (Stage G) =============
+//
+// Per-item market reference unit prices for cost_premium's EXTERNAL / HYBRID benchmark mode
+// (config variables.cost_premium.partition.benchmarkMode). DATA, not config: these prices do
+// NOT enter the config fingerprint, so a printed report under external/hybrid mode is
+// reproducible only if this table is also unchanged (stated on the Methodology page). Follows
+// the SensitivityResult pattern — its own model, its own seed (scripts/seed_reference_prices.ts,
+// in the restore recipe). Uploaded WHOLESALE (replace-all), never merged: a partial merge would
+// leave nobody able to say which prices are current. Unused at the default (internal) benchmark
+// mode, so an empty table is a working state for the shipped config.
+model ReferencePrice {
+  itemName     String   @id // one reference price per item
+  unitPriceUsd Float
+  currency     String   @default("USD")
+  source       String? // e.g. MOPS, AME
+  updatedAt    DateTime @default(now())
+}
+
 // ============= EXECUTIVE SUMMARIES =============
 
 model ExecutiveSummary {

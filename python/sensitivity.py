@@ -75,6 +75,7 @@ def setup_window(conn, start_ts, end_ts):
     ca._CALLOFF_FRAMEWORKS = ca.load_calloff_frameworks(conn)
     suppliers, purchases, metrics = ca.load_frames(conn, start_ts, end_ts)
     ca._PO_LINES = ca.load_po_lines(conn, start_ts, end_ts)
+    ca._REFERENCE_PRICES = ca.load_reference_prices_if_needed(conn)  # Stage G (external/hybrid)
     return suppliers, purchases, metrics
 
 

@@ -651,10 +651,15 @@ control exposure · SupplierMetric 151 rows · processScore min 0 / max 100 / av
 
 **Restore recipe:** `npx prisma db seed`, then
 `cd python && .venv/Scripts/python seed_compute.py`, then (from the repo root)
-`npx tsx scripts/seed_sensitivity.ts`. The third step seeds the weight-sensitivity
-snapshot (SensitivityResult singleton, stamped with the config fingerprint) so §3.5
-lands FRESH after a restore instead of "not yet computed" — without it a restore reads
-as a broken feature. It runs the same sanctioned path a save's phase 2 uses (~60s).
+`npx tsx scripts/seed_sensitivity.ts`, then `npx tsx scripts/seed_reference_prices.ts`.
+The third step seeds the weight-sensitivity snapshot (SensitivityResult singleton, stamped
+with the config fingerprint) so §3.5 lands FRESH after a restore instead of "not yet
+computed" — without it a restore reads as a broken feature. It runs the same sanctioned
+path a save's phase 2 uses (~60s). The fourth step (Stage G) seeds the `ReferencePrice`
+table with the roster's spend-weighted mean unit price per item, so cost_premium's
+external/hybrid benchmark mode lands on a WORKING (non-empty) list after a restore; it is
+DATA not config (not in the fingerprint) and unused at the default `internal` mode, so it
+never changes a default-config score.
 
 **Removed 2026-07-20 as dead:** `ImportForm`, `AddPurchaseCard`, `RemoveSupplierCard`,
 `RemovePurchaseCard`, `PurchaseRosterTable`, `lib/purchase-import.ts`,

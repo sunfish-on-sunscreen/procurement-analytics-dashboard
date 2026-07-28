@@ -31,6 +31,7 @@ import {
 } from "@/lib/risk-model";
 import { LookupTableCard } from "@/components/Methodology/LookupTableCard";
 import { FormulaEditorCard } from "@/components/Methodology/FormulaEditorCard";
+import { CostPremiumPartitionCard } from "@/components/Methodology/CostPremiumPartitionCard";
 
 // The draft keeps each weight as a STRING so the input types smoothly ("0.", "0.5");
 // it is parsed to a number for the live renormalization + validation.
@@ -631,6 +632,33 @@ export function RiskModelSettings({
               />
             );
           })}
+        </div>
+
+        {/* Cost-premium benchmark (Stage G): the partition parameters + external price list. */}
+        <div className="mt-2 flex flex-col gap-3 border-t pt-4">
+          <div>
+            <p className="text-sm font-medium text-foreground">Cost premium</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              The peer-group price comparison behind <code className="font-mono">cost_premium</code>.
+            </p>
+          </div>
+          <CostPremiumPartitionCard
+            initial={
+              active.variables?.cost_premium?.partition ?? {
+                key: "item",
+                benchmarkStat: "spend_weighted_mean",
+                minGroupMembers: 2,
+                minPosPerSupplierItem: 2,
+                belowMinimum: "excluded",
+                benchmarkMode: "internal",
+              }
+            }
+            busy={savingId !== null}
+            onAfterSave={() => {
+              void triggerSensitivity();
+              router.refresh();
+            }}
+          />
         </div>
       </div>
 
