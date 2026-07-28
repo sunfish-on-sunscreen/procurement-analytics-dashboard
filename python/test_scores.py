@@ -101,6 +101,67 @@ def test_concentration_curve():
     assert scores.concentration_0_100(9) == 0.0
 
 
+def test_formula_evaluator():
+    import formula_eval as fe
+    E = fe.evaluate_formula
+
+    # arithmetic, precedence, parens, unary, division
+    assert E("2 + 3 * 4", {}) == 14.0
+    assert E("(2 + 3) * 4", {}) == 20.0
+    assert E("-5 + 2", {}) == -3.0
+    assert E("10 / 4", {}) == 2.5
+    # variables from env
+    assert E("a + b * c", {"a": 1, "b": 2, "c": 3}) == 7.0
+    assert E("supply_concentration", {"supply_concentration": 44.0}) == 44.0
+    assert E("0.5 * a + 0.5 * b", {"a": 60.0, "b": 100.0}) == 80.0
+    # whitelisted functions
+    assert E("min(a, b, 3)", {"a": 5, "b": 2}) == 2.0
+    assert E("max(a, b)", {"a": 5, "b": 2}) == 5.0
+    assert E("abs(0 - 7)", {}) == 7.0
+    assert E("sqrt(16)", {}) == 4.0
+
+    def rejects(expr, env=None, needle=None):
+        try:
+            E(expr, env or {})
+        except fe.FormulaError as e:
+            if needle:
+                assert needle in str(e), (expr, str(e))
+            return
+        assert False, f"expected FormulaError for {expr!r}"
+
+    rejects("", needle="empty")
+    rejects("   ")
+    rejects("a + 1", needle="unknown variable")            # name not in env
+    rejects("1 / 0", needle="division by zero")
+    rejects("x / y", {"x": 1, "y": 0}, needle="division by zero")
+    rejects("sqrt(0 - 1)", needle="sqrt of a negative")
+    rejects("1e308 * 10", needle="non-finite")             # overflow -> inf
+    # default-deny: anything outside the whitelist is rejected by construction
+    rejects("a.b", {"a": 1})                                # attribute access
+    rejects("a[0]", {"a": 1})                               # subscript
+    rejects("a < b", {"a": 1, "b": 2})                      # comparison
+    rejects("a and b", {"a": 1, "b": 1})                    # boolean op
+    rejects("pow(2, 3)")                                    # non-whitelisted call
+    rejects("(lambda: 1)()")                                # lambda
+    rejects("True", needle="numeric")                       # bool literal
+
+    # reserved function names may not be variable ids (requirement #2)
+    assert all(fe.is_reserved_name(n) for n in ("min", "max", "abs", "sqrt"))
+    assert not fe.is_reserved_name("supply_concentration")
+
+    # normalize_to_bounds: (0,100) is a BIT-EXACT identity (scale 1.0), for the re-expression gate
+    for v in (0.0, 10.0, 24.0, 44.0, 62.5, 100.0, 37.837291):
+        assert fe.normalize_to_bounds(v, 0, 100) == v, v
+    assert fe.normalize_to_bounds(150.0, 0, 100) == 100.0   # clamp high
+    assert fe.normalize_to_bounds(-5.0, 0, 100) == 0.0      # clamp low
+    assert abs(fe.normalize_to_bounds(30.0, 0, 60) - 50.0) < 1e-9  # scaled bounds
+    try:
+        fe.normalize_to_bounds(1.0, 5, 5)                   # degenerate bounds
+        assert False, "expected FormulaError for hi <= lo"
+    except fe.FormulaError:
+        pass
+
+
 def test_lookup_table_validation():
     # The default config's three tables are valid (load_risk_model already validated
     # them, but re-assert directly).
