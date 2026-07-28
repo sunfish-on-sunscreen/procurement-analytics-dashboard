@@ -451,6 +451,23 @@ model AnalysisResult {
   @@index([rangeStartDate, rangeEndDate])
 }
 
+// ============= WEIGHT-SENSITIVITY SNAPSHOT (Stage C) =============
+
+// THE ONE SANCTIONED SNAPSHOT. Analytics is otherwise recompute-on-read (no snapshots),
+// but the drop-one weight-sensitivity analysis costs ~60s and runs N+1 full recomputes,
+// so it is persisted here instead of recomputed per request. Its validity is governed by
+// the CONFIG FINGERPRINT it was produced under (configFingerprint), NOT the period/range
+// recompute cycle — which is exactly why it must NOT live in AnalysisResult, whose
+// `periodId IS NULL` range-cache rows are wiped on every recompute (that would destroy the
+// snapshot and the two-phase safety net). On fingerprint mismatch the page treats it as
+// STALE and never presents it as current. Singleton: one row, id = "singleton".
+model SensitivityResult {
+  id                String   @id
+  configFingerprint String
+  computedAt        DateTime @default(now())
+  resultJson        Json
+}
+
 // ============= EXECUTIVE SUMMARIES =============
 
 model ExecutiveSummary {

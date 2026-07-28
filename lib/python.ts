@@ -2,6 +2,8 @@ import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 
+import type { SensitivityData } from "@/lib/sensitivity";
+
 export type PythonResult = {
   code: number;
   stdout: string;
@@ -121,4 +123,30 @@ export function runComputeRange(
   timeoutMs = 30000,
 ): Promise<PythonResult> {
   return runScript(["--start-date", startDate, "--end-date", endDate], timeoutMs);
+}
+
+/**
+ * Run the drop-one weight-sensitivity module (`python/sensitivity.py --json`) via the SAME
+ * spawn path as the recompute (venv python, cwd=root, inherited env — that is how DATABASE_URL
+ * reaches it). Read-only: the module monkeypatches + restores the config and never writes the
+ * DB. ~30-60s (N+1 recomputes across 4 windows), so the default timeout is a generous backstop.
+ * Returns parsed data, or null with a non-zero code on failure / unparseable output.
+ */
+export function runSensitivity(
+  timeoutMs = 180_000,
+): Promise<{ code: number; data: SensitivityData | null; stderr: string }> {
+  return runScript(["--json"], timeoutMs, "sensitivity.py").then((res) => {
+    if (res.code !== 0) {
+      return { code: res.code, data: null, stderr: res.stderr };
+    }
+    try {
+      const parsed = JSON.parse(res.stdout.trim()) as SensitivityData;
+      if (!parsed || !Array.isArray(parsed.windows)) {
+        return { code: -1, data: null, stderr: `${res.stderr}\nunexpected sensitivity payload` };
+      }
+      return { code: 0, data: parsed, stderr: res.stderr };
+    } catch (e) {
+      return { code: -1, data: null, stderr: `${res.stderr}\nJSON parse error: ${String(e)}` };
+    }
+  });
 }
