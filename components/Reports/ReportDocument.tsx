@@ -602,7 +602,7 @@ export function ReportDocument({
         {/* Cover — always */}
         <section
           id="section-cover"
-          className="pdf-page-break flex scroll-mt-24 flex-col gap-3 rounded-lg border bg-card p-8"
+          className="pdf-page-break flex scroll-mt-24 flex-col gap-3 rounded-lg border bg-card p-8 break-inside-avoid print:rounded-none print:border-0"
         >
           <p className="text-xs uppercase tracking-wide text-muted-foreground">
             Procurement Analytics
@@ -647,7 +647,7 @@ export function ReportDocument({
                   <div
                     key={f.key}
                     data-slot="card"
-                    className="flex flex-col gap-2 rounded-xl bg-card p-4 text-sm ring-1 ring-foreground/10"
+                    className="flex flex-col gap-2 rounded-xl bg-card p-4 text-sm ring-1 ring-foreground/10 print:rounded-none"
                   >
                     <h3 className="font-semibold leading-snug">
                       {i + 1}. {f.headline}
@@ -659,7 +659,7 @@ export function ReportDocument({
                     ))}
                     <div className="mt-1 grid grid-cols-3 gap-2">
                       {f.evidence.map((e, k) => (
-                        <div key={k} className="rounded-md bg-muted/50 p-2">
+                        <div key={k} className="rounded-md bg-muted/50 p-2 print:rounded-none print:bg-transparent">
                           <div className="font-semibold">{e.value}</div>
                           <div className="text-[11px] leading-tight text-muted-foreground">
                             {e.label}
@@ -1272,7 +1272,7 @@ function FocusCover({
   return (
     <section
       id="section-cover"
-      className="pdf-page-break flex scroll-mt-24 flex-col gap-3 rounded-lg border bg-card p-8"
+      className="pdf-page-break flex scroll-mt-24 flex-col gap-3 rounded-lg border bg-card p-8 break-inside-avoid print:rounded-none print:border-0"
     >
       <p className="text-xs uppercase tracking-wide text-muted-foreground">
         {eyebrow}
