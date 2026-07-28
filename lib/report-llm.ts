@@ -30,17 +30,23 @@ import type {
  * CONSOLE first — class, message, and status, with the key scrubbed — so the route's
  * 200-and-degrade design cannot hide the cause. Nothing is ever surfaced to the client.
  *
- * MODEL IS CONFIG, NOT CODE (GEMINI_REPORT_MODEL) with a gemini-2.5-flash default, so the
- * organisation can raise the tier later without a code change — the same
+ * MODEL IS CONFIG, NOT CODE (GEMINI_REPORT_MODEL) with a gemini-flash-latest default, so
+ * the organisation can pin or raise the model later without a code change — the same
  * config-not-code discipline as the risk-model weights.
  */
 
-const DEFAULT_MODEL = "gemini-2.5-flash";
-// One request per explicit user action; cap output so a runaway generation can't
-// balloon token use. Six short prose fields need well under this — the headroom is only
-// so a long-but-valid rewrite is never truncated (a truncated JSON parses as unusable
-// and silently degrades to the template, which we want to avoid on the success path).
-const MAX_OUTPUT_TOKENS = 2048;
+// gemini-flash-latest is an ALIAS that tracks the current GA flash model, chosen
+// deliberately over a pinned version: pinned `gemini-2.5-flash` was RETIRED for new
+// users (404 "no longer available to new users"), and the alias cannot suffer that
+// failure mode. Operators who need a pinned model set GEMINI_REPORT_MODEL.
+const DEFAULT_MODEL = "gemini-flash-latest";
+// One request per explicit user action; cap output so a runaway generation can't balloon
+// token use. The six prose fields need well under this — the headroom exists because the
+// current flash models THINK by default (see the config below), and thinking tokens count
+// against this budget, so it must fit the reasoning plus the JSON. A truncated response
+// parses as unusable and degrades to the template (now logged), so this is sized to avoid
+// that on the success path.
+const MAX_OUTPUT_TOKENS = 4096;
 const TIMEOUT_MS = 25_000;
 
 /** The env-configured narrative model (default gemini-2.5-flash). */
@@ -280,12 +286,11 @@ export async function generateSupplierBriefNarrative(
         // OUTPUT_SCHEMA (no fences, no prose wrapper).
         responseMimeType: "application/json",
         responseSchema: OUTPUT_SCHEMA,
-        // Gemini 2.5 Flash "thinks" by default; those tokens would consume the output
-        // budget and can truncate the JSON (which then silently degrades to template).
-        // Disable it — no chain-of-thought is needed to reword grounded prose — for
-        // predictable output and lower latency, the same intent as the previous
-        // provider's disabled thinking.
-        thinkingConfig: { thinkingBudget: 0 },
+        // Deliberately NO thinkingConfig. The current flash models (gemini-flash-latest,
+        // the 3.x generation) REJECT `thinkingBudget: 0` with 400 INVALID_ARGUMENT — only
+        // the now-retired 2.5 line accepted it. Letting each model use its default thinking
+        // keeps the request valid across model churn; MAX_OUTPUT_TOKENS is sized to absorb
+        // the thinking tokens, and a truncated/empty response still degrades to the template.
         // Client-side timeout: abort after TIMEOUT_MS and degrade to the template.
         abortSignal: AbortSignal.timeout(TIMEOUT_MS),
       },

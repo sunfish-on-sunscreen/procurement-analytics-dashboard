@@ -38,7 +38,7 @@ export type BriefNarrativeUnavailableReason =
   | "rate_limited";
 
 /**
- * Informational free-tier request caps for the DEFAULT model (gemini-2.5-flash). The
+ * Informational free-tier request caps for the DEFAULT model (gemini-flash-latest). The
  * free tier has no per-request cost, so what actually constrains use here is the request
  * rate. ⚠️ NOT a source of truth: Google sets rate limits PER PROJECT and no longer
  * publishes a universal table (the authoritative figures are in the Google AI Studio
