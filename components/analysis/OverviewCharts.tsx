@@ -166,14 +166,25 @@ const MonthlyTrendCard = ({ spend }: { spend: SpendOverviewResult }) => (
  */
 export function OverviewCharts({
   spend,
+  totalInvoices,
   embedded = false,
 }: {
   spend: SpendOverviewResult;
+  // Invoice-document count for the span, threaded from the report assembly (from
+  // the Invoice table). Distinct from spend.total_pos (the PO count) — equal only
+  // while Invoice is 1:1 with the PO — so the "Total invoices" KPI + prose below
+  // count invoices, not POs.
+  totalInvoices: number;
   embedded?: boolean;
 }) {
   const spendSpark = embedded
     ? spend.monthly_trend.map((m) => m.total)
     : undefined;
+  // Editor-only sparkline. The monthly series Python emits is a PO count; it is a
+  // trend SHAPE beneath the KPI (not a labelled figure) and equals monthly invoices
+  // while Invoice is 1:1 with the PO. A monthly INVOICE series would need a new
+  // per-month query and is deliberately not added — only the labelled total is
+  // invoice-sourced.
   const poSpark = embedded
     ? spend.monthly_trend.map((m) => m.po_count)
     : undefined;
@@ -181,7 +192,7 @@ export function OverviewCharts({
   const summary = (
     <p className="text-sm text-muted-foreground">
       This period totaled {usd0.format(spend.total_spend)} across{" "}
-      {num0.format(spend.total_pos)} invoices from{" "}
+      {num0.format(totalInvoices)} invoices from{" "}
       {num0.format(spend.active_suppliers)} active suppliers, with an average
       procure-to-pay cycle time of {spend.avg_cycle_time.toFixed(1)} days.
     </p>
@@ -191,7 +202,7 @@ export function OverviewCharts({
     <>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard label="Total Spend" value={usdCompact.format(spend.total_spend)} spark={spendSpark} />
-        <KpiCard label="Total invoices" value={num0.format(spend.total_pos)} spark={poSpark} />
+        <KpiCard label="Total invoices" value={num0.format(totalInvoices)} spark={poSpark} />
         <KpiCard label="Active Suppliers" value={num0.format(spend.active_suppliers)} />
         <KpiCard label="Avg Cycle Time" value={`${spend.avg_cycle_time.toFixed(1)} days`} />
       </div>

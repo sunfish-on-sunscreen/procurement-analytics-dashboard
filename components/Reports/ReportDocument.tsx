@@ -48,6 +48,10 @@ import { DownloadPdfButton } from "@/components/DownloadPdfButton";
 
 export type ReportAnalyses = {
   spend_overview: SpendOverviewResult | null;
+  // Invoice-document count for the span (Invoice table), threaded from BOTH report-
+  // assembly paths. Alongside spend_overview.total_pos (the PO count): the "Total
+  // invoices" KPI counts invoices; "purchase orders" prose keeps using total_pos.
+  total_invoices: number;
   abc: AbcResult | null;
   kraljic: KraljicResult | null;
   cycle_time: CycleTimeResult | null;
@@ -788,7 +792,7 @@ export function ReportDocument({
                 collapsed={collapsed.has("spendOverview")}
                 onToggle={() => toggleCollapse("spendOverview")}
               >
-                <OverviewCharts spend={analyses.spend_overview} embedded={embedded} />
+                <OverviewCharts spend={analyses.spend_overview} totalInvoices={analyses.total_invoices} embedded={embedded} />
                 <p className="text-sm leading-relaxed text-muted-foreground">
                   {T.spendOverview(ctx)}
                 </p>

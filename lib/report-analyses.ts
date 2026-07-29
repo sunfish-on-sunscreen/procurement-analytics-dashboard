@@ -1,5 +1,6 @@
 import "server-only";
 import { getRangeAnalyses } from "@/lib/range-analyses";
+import { getTotalInvoices } from "@/lib/enriched-purchase";
 import { computeCycleBreakdown } from "@/lib/cycle-breakdown";
 import { loadTemporalMatrix } from "@/lib/temporal-load";
 import type { RangeAnalyses } from "@/lib/analysis-types";
@@ -15,6 +16,10 @@ export type ReportRangeAnalyses = RangeAnalyses & {
   // can render the same note states the live page does (no-prior / partial-year /
   // insufficient) without a client fetch.
   temporal: TemporalLoad;
+  // Invoice-document count for the span (from the Invoice table) — the source for the
+  // report's "Total invoices" KPI, added ALONGSIDE spend_overview.total_pos (the PO
+  // count) which the "purchase orders" prose keeps using.
+  total_invoices: number;
 };
 
 /**
@@ -46,7 +51,7 @@ export async function assembleReportRangeAnalyses(
   const analyses = await getRangeAnalyses(startDate, endDate);
   if (!analyses) return null;
 
-  const [breakdown, temporal] = await Promise.all([
+  const [breakdown, temporal, total_invoices] = await Promise.all([
     computeCycleBreakdown(startDate, endDate, {
       abc: analyses.abc,
       performance_spend: analyses.performance_spend,
@@ -54,7 +59,8 @@ export async function assembleReportRangeAnalyses(
     loadTemporalMatrix(
       opts?.selectedPeriodId ? { selectedPeriodId: opts.selectedPeriodId } : undefined,
     ),
+    getTotalInvoices(startDate, endDate),
   ]);
 
-  return { ...analyses, breakdown, temporal };
+  return { ...analyses, breakdown, temporal, total_invoices };
 }

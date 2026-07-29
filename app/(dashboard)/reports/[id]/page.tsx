@@ -19,6 +19,7 @@ import {
 } from "@/lib/report-config";
 import { getSupplierCategoryMap } from "@/lib/suppliers";
 import { computeCycleBreakdown } from "@/lib/cycle-breakdown";
+import { getTotalInvoices } from "@/lib/enriched-purchase";
 import { loadTemporalMatrix } from "@/lib/temporal-load";
 import { assembleSupplierFocus } from "@/lib/report-focus";
 import type { ReportFocusData } from "@/lib/report-focus-types";
@@ -102,9 +103,10 @@ export default async function ReportDetailPage({
   // no-prior / partial-year note states), matching the live Action Priorities page.
   const pStart = summary.period.startDate.toISOString().slice(0, 10);
   const pEnd = summary.period.endDate.toISOString().slice(0, 10);
-  const [breakdown, temporal] = await Promise.all([
+  const [breakdown, temporal, total_invoices] = await Promise.all([
     computeCycleBreakdown(pStart, pEnd, { abc, performance_spend: performance }),
     loadTemporalMatrix({ selectedPeriodId: periodId }),
+    getTotalInvoices(pStart, pEnd),
   ]);
 
   // Focus → supplier: assemble the brief's per-supplier data server-side (read-only,
@@ -119,6 +121,7 @@ export default async function ReportDetailPage({
 
   const analyses: ReportAnalyses = {
     spend_overview: spend,
+    total_invoices,
     abc,
     kraljic,
     cycle_time: cycleTime,

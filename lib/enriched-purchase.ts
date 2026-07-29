@@ -63,3 +63,23 @@ export async function getEnrichedPurchases(
     Prisma.sql`SELECT * FROM "EnrichedPurchase" ${where}`,
   );
 }
+
+/**
+ * Count of INVOICE documents for a poDate span — Invoice joined to the
+ * void-excluded EnrichedPurchase view. Distinct from the PO count
+ * (`spend_overview.total_pos`): the two are equal ONLY while Invoice is 1:1 with
+ * the PO, so a surface labelled "invoices" must count invoices, not POs. `start` /
+ * `end` are inclusive ISO YYYY-MM-DD, scoped by poDate to match the PO count's
+ * window exactly. Shared by both report-assembly paths so they cannot diverge.
+ */
+export async function getTotalInvoices(start: string, end: string): Promise<number> {
+  const gte = new Date(`${start}T00:00:00`);
+  const lte = new Date(`${end}T23:59:59`);
+  const rows = await prisma.$queryRaw<{ n: number }[]>(Prisma.sql`
+    SELECT COUNT(i.id)::int AS n
+    FROM "EnrichedPurchase" ep
+    JOIN "Invoice" i ON i."poId" = ep."poId"
+    WHERE ep."poDate" >= ${gte} AND ep."poDate" <= ${lte}
+  `);
+  return rows[0]?.n ?? 0;
+}

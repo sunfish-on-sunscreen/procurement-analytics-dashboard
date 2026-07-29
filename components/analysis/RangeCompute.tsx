@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { RangeAnalyses } from "@/lib/analysis-types";
 import type { TemporalLoad } from "@/lib/temporal-anomalies";
-import { OverviewCharts } from "./OverviewCharts";
 import { AbcView } from "./AbcView";
 import { ActionDashboardView } from "@/components/ActionDashboardView";
 import { CycleTimeView } from "@/components/CycleTimeView";
@@ -12,9 +11,10 @@ import { EmptyState } from "@/components/EmptyState";
 
 // Kraljic + performance_spend ranges are now served by the Supplier
 // Classification page's own client (/api/supplier-classification), so they are
-// no longer routed through RangeCompute.
+// no longer routed through RangeCompute. The "overview" view was likewise
+// removed: Spend Overview renders through SpendOverviewClient in both modes, so
+// the only live caller passes kind="recommendations" (Action Priorities range).
 type View =
-  | "overview"
   | "abc"
   | "recommendations"
   | "cycle_time";
@@ -93,13 +93,6 @@ export function RangeCompute({
     );
   }
 
-  if (kind === "overview") {
-    return state.data.spend_overview ? (
-      <OverviewCharts spend={state.data.spend_overview} />
-    ) : (
-      <EmptyState />
-    );
-  }
   if (kind === "abc") {
     return state.data.abc ? <AbcView abc={state.data.abc} /> : <EmptyState />;
   }
