@@ -125,7 +125,7 @@ export function PerformanceSpendScatter({
           allowDataOverflow
           tick={{ fontSize: 11 }}
           label={{
-            value: "Profit impact (% of total spend) →",
+            value: "Spend (% of total) →",
             position: "insideBottom",
             offset: -12,
             fontSize: 12,

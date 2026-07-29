@@ -519,7 +519,7 @@ export function ReportDocument({
       "sourcingCoverage",
       "Competitive Coverage",
     );
-    add(sections.actionDashboard, "actionDashboard", "Action Priorities");
+    add(sections.actionDashboard, "actionDashboard", "Cross-analysis anomalies");
     add(sections.methodology, "methodology", "Methodology");
     return list;
   }, [

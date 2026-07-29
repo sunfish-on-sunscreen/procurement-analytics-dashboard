@@ -54,6 +54,7 @@ function suppliersToReach(rows: SupplierRankingRow[], total: number, targetPct: 
  */
 export function InsightsPanel({
   spendOverview,
+  totalInvoices,
   abc,
   ranking,
   sourcingCoverage,
@@ -61,6 +62,9 @@ export function InsightsPanel({
   isRangeMode,
 }: {
   spendOverview: SpendOverviewResult;
+  /** Invoice-document count for the span (route `total_invoices`), used wherever
+   *  the prose says "invoices" so the word matches its source. */
+  totalInvoices: number;
   abc: AbcResult;
   ranking: SupplierRankingRow[];
   /** Null when the span is served from a cache row set predating this analysis. */
@@ -127,7 +131,7 @@ export function InsightsPanel({
   // Top supplier (with invoice count joined from the ranking).
   const topSupplier = spendOverview.top_suppliers[0];
   const topSupplierInvoices = topSupplier
-    ? (ranking.find((r) => r.supplier_id === topSupplier.supplier_id)?.po_count ?? null)
+    ? (ranking.find((r) => r.supplier_id === topSupplier.supplier_id)?.invoice_count ?? null)
     : null;
 
   // Monthly rhythm.
@@ -157,7 +161,7 @@ export function InsightsPanel({
       <CardContent className="space-y-4 text-sm leading-relaxed">
         <p>
           You spent <strong>{formatCompactCurrency(total)}</strong> across{" "}
-          {num0.format(spendOverview.total_pos)} invoices with{" "}
+          {num0.format(totalInvoices)} invoices with{" "}
           {num0.format(spendOverview.active_suppliers)} suppliers {phrase}.
           {conc && (
             <>

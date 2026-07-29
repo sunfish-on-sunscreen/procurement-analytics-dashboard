@@ -18,8 +18,8 @@ type SortKey =
   | "supplier_name"
   | "category"
   | "total_spend"
-  | "po_count"
-  | "avg_po_value"
+  | "invoice_count"
+  | "avg_invoice_value"
   | "abc_class";
 
 type Align = "left" | "right" | "center";
@@ -30,8 +30,8 @@ const COLUMNS: { key: SortKey; label: string; align: Align; width?: string }[] =
   { key: "supplier_name", label: "Supplier", align: "left" },
   { key: "category", label: "Category", align: "left" },
   { key: "total_spend", label: "Spend", align: "right" },
-  { key: "po_count", label: "Invoices", align: "right" },
-  { key: "avg_po_value", label: "Avg invoice", align: "right" },
+  { key: "invoice_count", label: "Invoices", align: "right" },
+  { key: "avg_invoice_value", label: "Avg invoice", align: "right" },
   { key: "abc_class", label: "ABC", align: "center", width: "w-[56px]" },
 ];
 
@@ -136,8 +136,8 @@ export function SupplierRankingTable({
                   </span>
                 </td>
                 <td className="py-3 text-right tabular-nums">{r.inactive ? "—" : formatCompactCurrency(r.total_spend)}</td>
-                <td className="py-3 text-right tabular-nums">{r.inactive ? "—" : num0.format(r.po_count)}</td>
-                <td className="py-3 text-right tabular-nums">{r.inactive ? "—" : formatCompactCurrency(r.avg_po_value)}</td>
+                <td className="py-3 text-right tabular-nums">{r.inactive ? "—" : num0.format(r.invoice_count)}</td>
+                <td className="py-3 text-right tabular-nums">{r.inactive ? "—" : formatCompactCurrency(r.avg_invoice_value)}</td>
                 <td className="py-3 text-center">
                   {r.abc_class ? (
                     <span

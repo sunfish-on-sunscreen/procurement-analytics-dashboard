@@ -22,7 +22,7 @@ export const CATEGORY_ORDER: RecommendationCategory[] = [
 ];
 
 export const CATEGORY_LABEL: Record<RecommendationCategory, string> = {
-  critical_issues_engagement: "Critical Issues Engagement",
+  critical_issues_engagement: "Critical Issues",
   bottleneck_risk: "Bottleneck Risk Mitigation",
   hidden_gems_promotion: "Hidden Gems Promotion",
   process_improvement: "Process Improvement",

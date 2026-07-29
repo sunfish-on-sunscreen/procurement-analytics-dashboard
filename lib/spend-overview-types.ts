@@ -6,8 +6,11 @@ export type SupplierRankingRow = {
   supplier_name: string;
   category: string | null;
   total_spend: number;
-  po_count: number;
-  avg_po_value: number;
+  // Invoice documents for this supplier over the span (Invoice is 1:1 with the
+  // void-excluded purchase order, so this equals the PO count but is sourced from
+  // invoices to match the "Invoices" / "Avg invoice" column labels).
+  invoice_count: number;
+  avg_invoice_value: number;
   abc_class: "A" | "B" | "C" | null;
   kraljic_quadrant: KraljicQuadrant | null;
   rank: number;

@@ -41,6 +41,10 @@ function periodPhrase(periodLabel: string, isRangeMode: boolean): string {
 
 type PageData = {
   spend_overview: SpendOverviewResult;
+  // Invoice-document count for the span (sourced from the Invoice table in the
+  // route). Equals the PO count under the verified 1:1, but feeds the "invoice"
+  // KPIs so their source matches their label.
+  total_invoices: number;
   abc: AbcResult | null;
   // Nullable at the boundary like `abc` — a span served from a pre-existing cache
   // row set won't carry it, so every consumer must guard rather than assume.
@@ -129,10 +133,13 @@ export function SpendOverviewClient({
   }
 
   const spend = data.spend_overview;
-  const avgPoValue = spend.total_pos > 0 ? spend.total_spend / spend.total_pos : 0;
+  // "Invoices" is sourced from the Invoice table (route `total_invoices`), not the
+  // PO count. Identical value under the verified 1:1; honest about its source.
+  const totalInvoices = data.total_invoices;
+  const avgInvoiceValue = totalInvoices > 0 ? spend.total_spend / totalInvoices : 0;
   const phrase = periodPhrase(periodLabel, isRangeMode);
   const perSupplier =
-    spend.active_suppliers > 0 ? spend.total_pos / spend.active_suppliers : 0;
+    spend.active_suppliers > 0 ? totalInvoices / spend.active_suppliers : 0;
   // ⚠️ Distinct REAL category count — NOT `by_category.length` (capped at top-8 +
   // synthetic "Other" for the donut). Prefer the compute-layer truth; fall back to
   // the complete `top_suppliers_by_category` key set for pre-2026-07-14 cached rows.
@@ -147,6 +154,7 @@ export function SpendOverviewClient({
       {data.abc && (
         <InsightsPanel
           spendOverview={spend}
+          totalInvoices={totalInvoices}
           abc={data.abc}
           ranking={data.ranking}
           sourcingCoverage={data.sourcing_coverage}
@@ -165,7 +173,7 @@ export function SpendOverviewClient({
         <StatBlock
           size="lg"
           label="Total invoices"
-          value={num0.format(spend.total_pos)}
+          value={num0.format(totalInvoices)}
           sublabel={`${perSupplier.toFixed(1)} per supplier`}
         />
         <StatBlock
@@ -177,7 +185,7 @@ export function SpendOverviewClient({
         <StatBlock
           size="lg"
           label="Avg invoice value"
-          value={formatCompactCurrency(avgPoValue)}
+          value={formatCompactCurrency(avgInvoiceValue)}
           sublabel="per invoice"
         />
       </div>

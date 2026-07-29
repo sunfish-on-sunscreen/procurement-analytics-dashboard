@@ -11,9 +11,9 @@ export const runtime = "nodejs";
 
 /**
  * Spend Overview page data for a date span: the cached spend_overview analysis
- * (charts) plus a server-side supplier ranking. The ranking aggregates Purchase
- * by supplier over the span (spend / PO count / avg), merged with ABC class +
- * Kraljic quadrant from the analyses and category from the supplier catalog.
+ * (charts) plus a server-side supplier ranking. The ranking aggregates the span
+ * by supplier (spend / invoice count / avg), merged with ABC class + Kraljic
+ * quadrant from the analyses and category from the supplier catalog.
  * Login required (read-only); any role.
  */
 export async function POST(request: Request) {
@@ -59,18 +59,26 @@ export async function POST(request: Request) {
   // Per-supplier aggregate over the span from the derived EnrichedPurchase view.
   // Filter mirrors the Python load (poDate = order-year membership) so totals
   // reconcile with spend_overview.
+  //
+  // "Invoices" on this page means invoice documents. Invoice is 1:1 with the
+  // (void-excluded) purchase order — verified 647:647, with zero POs carrying no
+  // invoice or more than one — so counting Invoice rows joined to the view yields
+  // the same figure the PO grain did, now sourced from invoices to match the
+  // "Invoices" / "Avg invoice" labels. Spend stays PO-grain (SUM over the view);
+  // the 1:1 join cannot fan it out.
   const start = new Date(`${startDate}T00:00:00`);
   const end = new Date(`${endDate}T23:59:59`);
   const agg = await prisma.$queryRaw<
-    { id: string; po_count: number; total_spend: number }[]
+    { id: string; invoice_count: number; total_spend: number }[]
   >(Prisma.sql`
-    SELECT "supplierExternalId" AS id,
-           COUNT(*)::int AS po_count,
-           SUM("totalValueUsd")::float8 AS total_spend
-    FROM "EnrichedPurchase"
-    WHERE "poDate" >= ${start}
-      AND "poDate" <= ${end}
-    GROUP BY "supplierExternalId"
+    SELECT ep."supplierExternalId" AS id,
+           COUNT(i.id)::int AS invoice_count,
+           SUM(ep."totalValueUsd")::float8 AS total_spend
+    FROM "EnrichedPurchase" ep
+    JOIN "Invoice" i ON i."poId" = ep."poId"
+    WHERE ep."poDate" >= ${start}
+      AND ep."poDate" <= ${end}
+    GROUP BY ep."supplierExternalId"
   `);
   const aggById = new Map(agg.map((r) => [r.id, r]));
 
@@ -95,27 +103,33 @@ export async function POST(request: Request) {
       const a = aggById.get(s.supplierExternalId);
       const abcRow = abcBySupplier.get(s.supplierExternalId);
       const krRow = quadrantBySupplier.get(s.supplierExternalId);
-      const poCount = a ? Number(a.po_count) || 0 : 0;
+      const invoiceCount = a ? Number(a.invoice_count) || 0 : 0;
       const totalSpend = a ? Number(a.total_spend) || 0 : 0;
       return {
         supplier_id: s.supplierExternalId,
         supplier_name: s.supplierName,
         category: s.category ?? null,
         total_spend: totalSpend,
-        po_count: poCount,
-        avg_po_value: poCount > 0 ? totalSpend / poCount : 0,
+        invoice_count: invoiceCount,
+        avg_invoice_value: invoiceCount > 0 ? totalSpend / invoiceCount : 0,
         abc_class: abcRow?.abc_class ?? null,
         kraljic_quadrant: krRow?.quadrant ?? null,
         rank: 0,
-        inactive: poCount === 0,
+        inactive: invoiceCount === 0,
         retired: retiredIds.has(s.supplierExternalId),
       };
     })
     .sort((a, b) => b.total_spend - a.total_spend)
     .map((row, i) => ({ ...row, rank: i + 1 }));
 
+  // Total invoice count for the span (= Σ per-supplier invoice_count). Equal to the
+  // Python spend_overview PO count under the verified 1:1, but sourced from invoices
+  // so the "Total invoices" / "Avg invoice value" KPIs match their labels.
+  const totalInvoices = agg.reduce((sum, r) => sum + (Number(r.invoice_count) || 0), 0);
+
   return NextResponse.json({
     spend_overview: analyses.spend_overview,
+    total_invoices: totalInvoices,
     abc: analyses.abc ?? null,
     // Competitive sourcing coverage — how the spend reached the market. Nullable at
     // the boundary like `abc`: a span computed before this analysis existed can be

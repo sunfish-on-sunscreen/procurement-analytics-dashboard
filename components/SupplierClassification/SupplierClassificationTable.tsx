@@ -27,7 +27,7 @@ const COLUMNS: { key: SortKey; label: string; align: Align; width?: string }[] =
   { key: "supplier_name", label: "Supplier", align: "left" },
   { key: "category", label: "Category", align: "left" },
   { key: "abc_class", label: "ABC", align: "center", width: "w-[56px]" },
-  { key: "kraljic_quadrant", label: "Exposure", align: "center", width: "w-[120px]" },
+  { key: "kraljic_quadrant", label: "Kraljic quadrant", align: "center", width: "w-[120px]" },
   { key: "performance_score", label: "Performance", align: "right", width: "w-[140px]" },
   { key: "total_spend", label: "Spend", align: "right" },
 ];

@@ -515,7 +515,7 @@ function ThreeWayMatchTable({
   return (
     <Card className={cardElevation}>
       <CardHeader>
-        <CardTitle>Performance by Exposure Positioning</CardTitle>
+        <CardTitle>Match compliance and cycle time, by exposure quadrant</CardTitle>
         <CardDescription>
           How each Kraljic exposure quadrant performs on match compliance and cycle time.
         </CardDescription>

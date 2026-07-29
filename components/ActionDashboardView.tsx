@@ -482,7 +482,7 @@ function PrioritiesStatGrid({
       />
       <StatBlock
         size="comfortable"
-        label="On important relationships"
+        label="Flagged & important (A-tier / Strategic)"
         value={hub ? intFmt.format(hub.importantUnionCount) : pending ? skeleton : "—"}
         sublabel={
           hub && hub.process.importantSpend > 0
@@ -492,7 +492,7 @@ function PrioritiesStatGrid({
       />
       <StatBlock
         size="comfortable"
-        label="Top-10 needing attention"
+        label="Big spenders flagged (of 10)"
         value={`${narrative.top10_in_attention}`}
         sublabel="of your 10 largest suppliers"
       />
@@ -698,7 +698,7 @@ function WhereToAct({
                     {group.title}
                   </span>
                   <span className="ml-auto font-mono text-xs text-muted-foreground">
-                    {groupCount} flagged
+                    {groupCount} to review
                   </span>
                 </div>
                 <p className="mt-0.5 text-xs text-muted-foreground">— {group.tagline}</p>
@@ -941,13 +941,19 @@ function AnomalyTable({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <AnomalyFilterChips active={activeFilter} counts={counts} onSelect={onSelectFilter} />
-          {activeFilter && (
-            <span className="text-xs text-muted-foreground">
-              Showing {filtered.length} of {rows.length} suppliers
-            </span>
-          )}
+        <div className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <AnomalyFilterChips active={activeFilter} counts={counts} onSelect={onSelectFilter} />
+            {activeFilter && (
+              <span className="text-xs text-muted-foreground">
+                Showing {filtered.length} of {rows.length} suppliers
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Counts overlap: a supplier flagged by two families is counted once in the
+            total, so the family counts add up to more than All.
+          </p>
         </div>
 
         {sorted.length > 0 ? (
@@ -959,7 +965,7 @@ function AnomalyTable({
                   <SortHead label="Supplier" sortKey="supplier_name" active={sort.key === "supplier_name"} dir={sort.dir} onSort={toggle} defaultDir="asc" />
                   <SortHead label="Spend" sortKey="total_spend_usd" active={sort.key === "total_spend_usd"} dir={sort.dir} onSort={toggle} align="right" width="w-[100px]" />
                   <SortHead label="ABC" sortKey="abc_class" active={sort.key === "abc_class"} dir={sort.dir} onSort={toggle} align="center" defaultDir="asc" width="w-[64px]" />
-                  <SortHead label="Exposure" sortKey="kraljic_quadrant" active={sort.key === "kraljic_quadrant"} dir={sort.dir} onSort={toggle} align="center" defaultDir="asc" width="w-[120px]" />
+                  <SortHead label="Kraljic quadrant" sortKey="kraljic_quadrant" active={sort.key === "kraljic_quadrant"} dir={sort.dir} onSort={toggle} align="center" defaultDir="asc" width="w-[120px]" />
                   <SortHead label="Performance" sortKey="performance_score" active={sort.key === "performance_score"} dir={sort.dir} onSort={toggle} align="right" width="w-[140px]" />
                   <TableHead className="w-[260px]">Anomalies</TableHead>
                 </TableRow>

@@ -64,7 +64,7 @@ export const SYNTHESIS_META: Record<SynthesisKey, SynthesisMeta> = {
   },
   leverage_workhorse: {
     key: "leverage_workhorse",
-    title: "Workhorse leverage",
+    title: "Workhorse leverage (dependable)",
     quadrant: "Leverage",
     below: false,
     blurb: "high-spend, competitive-category suppliers performing above the median — dependable volume to consolidate around.",

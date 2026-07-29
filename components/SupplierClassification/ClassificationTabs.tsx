@@ -557,6 +557,13 @@ export function ClassificationTabs({
           active={tab}
           onChange={setTab}
         />
+        {/* The two tabs deliberately use DIFFERENT palettes (Kraljic quadrant vs
+            performance zone), so name what colour encodes on the active tab. */}
+        <p className="mt-2 text-xs text-muted-foreground">
+          {tab === "kraljic"
+            ? "Colours show Kraljic quadrant."
+            : "Colours show performance zone."}
+        </p>
       </CardHeader>
       <CardContent className="p-4">
         {tab === "kraljic" ? (
