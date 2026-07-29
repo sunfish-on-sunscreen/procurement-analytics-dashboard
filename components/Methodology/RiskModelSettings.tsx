@@ -134,11 +134,12 @@ function redistributeWeights(survivors: DraftComponent[]): DraftComponent[] {
 
 // Composite-level impact preview (Stage I): the Kraljic-quadrant / performance-zone churn if the
 // CURRENT draft composite (with its add / remove / reweight) were saved, computed by the SAME
-// read-only /api/risk-model/preview + python/preview.py the formula editor uses. Rendered only for
-// a formula-defined composite that is dirty AND valid (a builtin composite has no formulas to
-// evaluate; an invalid draft is gated out by the parent, so preview.py never sees an empty
-// formula). Debounced; a request id guards against out-of-order responses. setState happens only
-// in the async callback, never synchronously in the effect body (eslint bans that).
+// read-only /api/risk-model/preview + python/preview.py the formula editor uses. Rendered for ANY
+// dirty AND valid composite — including performanceComposite, whose builtin sub-score columns
+// preview.py now injects (supplyRisk -> Kraljic quadrant; performanceRisk / performanceComposite ->
+// performance zone). An invalid draft is gated out by the parent, so preview.py never sees an empty
+// formula. Debounced; a request id guards against out-of-order responses. setState happens only in
+// the async callback, never synchronously in the effect body (eslint bans that).
 function CompositeImpactPreview({ candidate }: { candidate: RiskComposite }) {
   const [impact, setImpact] = useState<PreviewImpact | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -534,9 +535,6 @@ export function RiskModelSettings({
           const saving = savingId === composite.id;
           const busy = savingId !== null;
           const compositeFp = compositeFingerprint(composite.id, active.composites, active.lookupTables, active.variables ?? {});
-          // Add is offered only on a composite of formula-defined components (no built-ins) —
-          // driven off the builtin flag, never a composite-id check.
-          const addEligible = composite.components.every((c) => !c.builtin);
           const canReset = !activeAtDefaults(ci);
           const confirming = confirmingResetId === composite.id;
           const err = errorById[composite.id];
@@ -714,11 +712,11 @@ export function RiskModelSettings({
                     );
                   })}
 
-                  {/* Add a component — formula-defined composites only (built-in sub-scores can
-                      neither be added nor expressed as formulas). Name first (the id derives from
-                      it); the id is minted server-side and shown read-only. */}
-                  {addEligible &&
-                    (addingCi === ci ? (
+                  {/* Add a component — allowed on EVERY composite: Add produces a NEW non-builtin,
+                      formula-defined component. The built-in sub-scores stay protected per-component
+                      (no Remove, no Edit formula) off the builtin flag — never a composite-id check.
+                      Name first (the id derives from it); the id is minted server-side. */}
+                  {addingCi === ci ? (
                       <div className="flex flex-wrap items-center gap-2 border-t pt-3">
                         <Input
                           type="text"
@@ -764,7 +762,7 @@ export function RiskModelSettings({
                       >
                         + Add component
                       </Button>
-                    ))}
+                    )}
 
                   {status.error && (
                     <p className="text-xs font-medium text-destructive">{status.error}</p>
@@ -772,8 +770,8 @@ export function RiskModelSettings({
                   {err && <p className="text-xs font-medium text-destructive">{err}</p>}
 
                   {/* Impact preview before save (Stage I) — quadrant/zone churn of the whole draft
-                      composite (add / remove / reweight), for a valid formula-defined composite. */}
-                  {addEligible && dirty && !status.error && (
+                      composite (add / remove / reweight), for ANY dirty + valid composite. */}
+                  {dirty && !status.error && (
                     <CompositeImpactPreview candidate={parsed[ci]} />
                   )}
 

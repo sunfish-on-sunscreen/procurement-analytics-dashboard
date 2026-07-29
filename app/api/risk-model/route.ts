@@ -123,23 +123,19 @@ export async function POST(request: Request) {
 
   // Stage I: gate component ADD / REMOVE against the on-disk composite BEFORE merging. The edit's
   // component list is authoritative for a composite's NON-BUILTIN components, so an id not on disk
-  // is an ADD and a non-builtin id on disk but absent from the edit is a REMOVE. Adds are allowed
-  // only on a composite with no built-in sub-scores (drive off the builtin flag, not an id check)
-  // and only with a generated `custom_` id; a remove is blocked if anything still references it.
+  // is an ADD and a non-builtin id on disk but absent from the edit is a REMOVE. An ADD is allowed
+  // on EVERY composite (it produces a NON-BUILTIN, formula-defined component) and must carry a
+  // generated `custom_` id (or be a shipped default restored by reset). REMOVE and formula-edit
+  // stay blocked on a builtin PER-COMPONENT (below + the Stage-F check) and a double-count is
+  // caught by formulaError — all driven off the builtin flag, never a composite-id check. A remove
+  // is blocked if anything still references it.
   for (const ce of parsed.data.composites ?? []) {
     const cur = current.composites.find((c) => c.id === ce.id);
     if (!cur) continue; // unknown composite — the merge ignores it
     const curIds = new Set(cur.components.map((c) => c.id));
     const editIds = new Set(ce.components.map((c) => c.id));
-    const addEligible = cur.components.every((c) => !c.builtin);
     for (const c of ce.components) {
       if (curIds.has(c.id)) continue; // an ADD
-      if (!addEligible) {
-        return NextResponse.json(
-          { error: `${ce.id}: components cannot be added to a composite of built-in sub-scores.` },
-          { status: 400 },
-        );
-      }
       // Allowed adds: a generated custom_ id, OR a shipped default component being RESTORED by
       // reset-to-defaults (a removed shipped component re-added — not a custom id, but a known one).
       const isKnownDefault = (RISK_MODEL_DEFAULTS.composites[ce.id] ?? []).some((d) => d.id === c.id);
