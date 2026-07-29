@@ -57,24 +57,21 @@ export interface RiskComponent {
    * its formula, and add/remove are not offered for it. Absent/false on the risk
    * composites' components. Weight edit and enable/disable stay allowed.
    *
-   * ⚠️ PREREQUISITE (DEFERRED, NOT built) — ADD-COMPONENT ON performanceComposite. Adding a
-   * non-builtin (formula) component to performanceComposite is a CORE scoring-path change, NOT
-   * an extension of the risk-composite mechanism: performanceComposite is WEIGHTS-ONLY — scores.py
-   * combines the four builtin sub-score COLUMNS by weight (`sum(m[col]*weight)`) and does NOT blend
-   * through risk_config.evaluate_composite the way supplyRisk/performanceRisk do. Add is excluded
-   * on performanceComposite today via THIS flag (every component is builtin); the realistic need
-   * (drop a dimension) is already served by disabling a builtin. Before enabling add/remove of
-   * non-builtin components here, THREE things must land TOGETHER:
-   *   1. compute_scores routes performanceComposite through evaluate_composite, with the builtin
-   *      sub-score columns entering env as variables — one blend path, not two;
-   *   2. the double-count guard (builtinInputBlockedIn / validate_builtin_input_block) is extended
-   *      from the TRANSITIVE case to the DIRECT SIBLING case — a builtin-input variable alongside
-   *      that builtin in performanceComposite (e.g. on_time_rate next to delivery_score) double-
-   *      counts more directly than the transitive case the guard was written for;
+   * ⚠️ ADD-COMPONENT ON performanceComposite — BUILT. Adding a non-builtin (formula) component
+   * to performanceComposite was a CORE scoring-path change (not an extension of the risk-composite
+   * mechanism), and landed as THREE parts together:
+   *   1. compute_scores routes performanceComposite through risk_config.evaluate_composite, the
+   *      four builtin sub-score COLUMNS entering env as variables (keyed by the builtin id) — ONE
+   *      blend path, not the old sum(m[col]*weight); proven bit-identical (harness md5 unchanged);
+   *   2. the double-count guard (builtinInputBlockedIn / validate_builtin_input_block) now fires on
+   *      the DIRECT SIBLING case too — a builtin-input variable alongside that builtin in
+   *      performanceComposite (e.g. on_time_rate next to delivery_score) — as ONE forbidden set
+   *      with the transitive case, not a parallel check;
    *   3. python/preview.py accepts performanceComposite as a candidate and reports PERFORMANCE ZONE
-   *      movement, not Kraljic quadrant (it KeyErrors on builtins' missing `formula` today).
-   * The guard is deliberately NOT pre-extended — with no add there is no live sibling case, and we
-   * do not build for cases that cannot occur (cf. the vacuous componentReferrers orphan check).
+   *      movement (not Kraljic quadrant), injecting the builtin columns so it no longer KeyErrors.
+   * The four builtins STAY non-formula-editable and non-removable (quality_score aggregates per-PO
+   * records, not column arithmetic); weight edit + enable/disable stay allowed. All driven off THIS
+   * flag, never a composite-id check.
    */
   builtin?: boolean;
   /**
@@ -297,16 +294,19 @@ export function dependenciesOf(composite: RiskComposite): string[] {
 }
 
 /**
- * The Stage-E structural double-count block, DERIVED from the dependency graph (never
- * hardcoded). A variable declaring `feedsBuiltin` = B_v is BLOCKED in a composite C that
- * PRODUCES a sibling builtin B_C (B_C ≠ B_v, same parent composite), because placing it there
- * feeds the parent composite (performanceComposite) twice at different weights — the Stage-1
- * multiply-not-add hazard one level deeper. Not blocked when: the variable feeds nothing; C
- * produces no builtin (supplyRisk — the Kraljic Y-axis, which gets a UI design NOTE, not a
- * block); or B_v IS what C produces (that is the composite's own definition, not a duplicate).
- * Returns the block details (for the message) or null. Mirrors
- * python/risk_config.validate_builtin_input_block — the settings UI + save route both call this;
- * Python re-checks at load so a hand-edited config cannot bypass it.
+ * The structural double-count block, DERIVED from the dependency graph (never hardcoded). A
+ * variable declaring `feedsBuiltin` = B_v is BLOCKED in a composite C when B_v would ALSO enter
+ * the same final composite — ONE forbidden set covering two cases (mirrors the Python guard):
+ *   DIRECT SIBLING — B_v is a component of C itself (e.g. on_time_rate, which feeds delivery_score,
+ *     in a formula component of performanceComposite where delivery_score is a weighted builtin);
+ *   TRANSITIVE — C PRODUCES a builtin B_C and B_v is a SIBLING of B_C in the parent composite
+ *     (e.g. an on_time_rate formula in performanceRisk, which produces risk_score alongside
+ *     delivery_score) — the Stage-1 multiply-not-add hazard one level deeper.
+ * Not blocked when: the variable feeds nothing; B_v is what C PRODUCES (that is C's own definition,
+ * not a duplicate); or C neither contains nor produces a builtin (supplyRisk — the Kraljic Y-axis,
+ * which gets a UI design NOTE, not a block). Returns the block details (for the message) or null.
+ * Mirrors python/risk_config.validate_builtin_input_block — the settings UI + save route both call
+ * this; Python re-checks at load so a hand-edited config cannot bypass it.
  */
 export function builtinInputBlockedIn(
   variable: Pick<CatalogueVariable, "feedsBuiltin">,
@@ -317,16 +317,29 @@ export function builtinInputBlockedIn(
   if (!fb) return null;
   const parentOfBuiltin = new Map<string, string>();
   const producedBy = new Map<string, string>(); // composite id -> the builtin it produces
+  const builtinsOf = new Map<string, Set<string>>(); // composite id -> its builtin component ids
   for (const c of composites) {
     for (const comp of c.components) {
-      if (comp.builtin) parentOfBuiltin.set(comp.id, c.id);
+      if (comp.builtin) {
+        parentOfBuiltin.set(comp.id, c.id);
+        if (!builtinsOf.has(c.id)) builtinsOf.set(c.id, new Set());
+        builtinsOf.get(c.id)!.add(comp.id);
+      }
       if (comp.configuredIn) producedBy.set(comp.configuredIn, comp.id);
     }
   }
+  // Builtins this composite must not double-count: the ones it CONTAINS directly (direct sibling)
+  // PLUS the siblings of any builtin it PRODUCES (transitive), minus the produced one (feeding
+  // your own output is the definition).
+  const forbidden = new Set<string>(builtinsOf.get(compositeId) ?? []);
   const produced = producedBy.get(compositeId);
-  if (!produced || fb === produced) return null;
-  if (parentOfBuiltin.get(fb) !== parentOfBuiltin.get(produced)) return null; // not a sibling
-  return { producedBuiltin: produced, feedsBuiltin: fb };
+  if (produced) {
+    for (const b of builtinsOf.get(parentOfBuiltin.get(produced) ?? "") ?? []) {
+      if (b !== produced) forbidden.add(b);
+    }
+  }
+  if (!forbidden.has(fb)) return null;
+  return { producedBuiltin: produced ?? fb, feedsBuiltin: fb };
 }
 
 /** The whitelisted formula functions (mirrors python/formula_eval.ALLOWED_FUNCS). They are

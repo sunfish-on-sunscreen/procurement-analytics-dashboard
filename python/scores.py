@@ -214,19 +214,35 @@ def compute_scores(m: pd.DataFrame, roster_cat_counts: dict, agg_maps: dict = No
         score, _contrib = risk_config.evaluate_composite(_cfg, env)
         new_risk.append(score)
     m["risk_score"] = np.round(new_risk, 2)
-    # Composite weights + polarity come from config (performanceComposite), through the
-    # SAME shared resolve_effective_weights + combine_score the risk composites use — no
-    # second renormalization path. Read fresh each call so a config edit / sensitivity
-    # monkeypatch of risk_config.get_composite takes effect. With all four enabled and
-    # 0.30 + 0.30 + 0.22 + 0.18 == 1.0 exactly (verified), the divisor is 1.0 and
-    # invertPolarity=false makes combine_score a clip-only no-op, so this reproduces the
-    # old raw-weight sum bit-for-bit. The _pw iteration order is the config component
-    # order (quality/delivery/process/risk), matching the old WEIGHTS dict order.
+    # performanceComposite now blends through the SAME evaluate_composite path as the risk
+    # composites — ONE blend path, no second sum(m[col]*weight). Per supplier: the four builtin
+    # sub-score COLUMNS enter env keyed by the builtin id (which IS the column name), and any
+    # FORMULA component reads catalogue variables resolved via resolve_env (empty for the shipped
+    # config — all four components builtin). With every builtin enabled, (0,100) bounds a bit-exact
+    # x1.0 identity, and 0.30+0.30+0.22+0.18 == 1.0 exactly (divisor 1.0), this reproduces the old
+    # weighted sum BIT-FOR-BIT (proven on a 41^4 2dp grid + the harness md5). Read fresh each call
+    # so a config edit / sensitivity monkeypatch of get_composite takes effect.
     _pc = risk_config.get_composite("performanceComposite")
-    _pw = risk_config.resolve_effective_weights(_pc)
-    _pinvert = risk_config.invert_polarity(_pc)
-    _composite = sum(m[col] * _pw[col] for col in _pw)
-    m["composite_score"] = np.round(risk_config.combine_score(_composite, _pinvert), 2)
+    _pc_referenced = set()
+    for _comp in _pc["components"]:
+        if _comp.get("enabled", True) and _comp.get("formula"):
+            _pc_referenced |= formula_eval.referenced_names(_comp["formula"])
+    _composite = []
+    for _, r in m.iterrows():
+        _cat = str(r.get("category", ""))
+        _other = max(0, int(roster_cat_counts.get(_cat, 1)) - 1)
+        _key_values = {
+            "supplier_id": r.get("supplier_id", ""),
+            "country": r.get("country", ""),
+            "roster_other_count": _other,
+        }
+        _env = risk_config.resolve_env(_pc_referenced, _key_values, agg_maps or {})
+        for _comp in _pc["components"]:
+            if _comp.get("builtin"):
+                _env[_comp["id"]] = float(r[_comp["id"]])  # builtin sub-score column -> env variable
+        _score, _contrib = risk_config.evaluate_composite(_pc, _env)
+        _composite.append(_score)
+    m["composite_score"] = np.round(_composite, 2)
     return m
 
 
@@ -312,15 +328,17 @@ def build_aggregate_maps(purchases: pd.DataFrame, referenced_ids, variables: dic
     return maps
 
 
-def _performance_risk_aggregate_maps(purchases: pd.DataFrame) -> dict:
-    """Aggregate maps for the AGGREGATE variables the performanceRisk formula references,
-    built from this window's (snake_case) PO frame. Empty for the shipped config (its
-    performanceRisk references only lookup variables)."""
-    cfg = risk_config.get_composite("performanceRisk")
+def _composite_aggregate_maps(purchases: pd.DataFrame, composite_ids) -> dict:
+    """Aggregate maps for the AGGREGATE variables the given composites' enabled FORMULA
+    components reference, built from this window's (snake_case) PO frame. A builtin component
+    carries no formula and references nothing (guarded). Empty for the shipped config
+    (performanceRisk references only lookups; performanceComposite has no formula components)."""
     referenced = set()
-    for comp in cfg["components"]:
-        if comp.get("enabled", True):
-            referenced |= formula_eval.referenced_names(comp["formula"])
+    for composite_id in composite_ids:
+        cfg = risk_config.get_composite(composite_id)
+        for comp in cfg["components"]:
+            if comp.get("enabled", True) and comp.get("formula"):
+                referenced |= formula_eval.referenced_names(comp["formula"])
     return build_aggregate_maps(purchases, referenced, risk_config.get_variables())
 
 
@@ -356,8 +374,9 @@ def build_window_metrics(
             row[c] = snap[c]
         rows.append(row)
 
-    # Stage E: aggregate maps for any AGGREGATE variable performanceRisk references, built
-    # from THIS window's PO frame (empty for the shipped config). Passed to compute_scores so
-    # risk_score can read a behavioural field if a formula composes one.
-    agg_maps = _performance_risk_aggregate_maps(purchases)
+    # Aggregate maps for any AGGREGATE variable the performanceRisk OR performanceComposite
+    # formulas reference, built from THIS window's PO frame (empty for the shipped config).
+    # Passed to compute_scores so both risk_score and the composite can read a behavioural
+    # field if a formula composes one.
+    agg_maps = _composite_aggregate_maps(purchases, ("performanceRisk", "performanceComposite"))
     return compute_scores(pd.DataFrame(rows), roster_cat_counts, agg_maps)

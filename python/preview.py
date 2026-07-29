@@ -63,18 +63,38 @@ def _candidate_env(candidate, suppliers, purchases):
     return referenced, computed_maps, rows
 
 
-def preview_rows(candidate, suppliers, purchases):
+def preview_rows(candidate, suppliers, purchases, metrics):
     referenced, computed_maps, rows = _candidate_env(candidate, suppliers, purchases)
     weights = risk_config.resolve_effective_weights(candidate)
     invert = risk_config.invert_polarity(candidate)
     enabled = [c for c in candidate["components"] if c.get("enabled", True)]
+    # A candidate carrying BUILTIN components (performanceComposite) needs the builtin sub-score
+    # COLUMNS injected into each supplier's env — computed with the LIVE config (the candidate
+    # changes only the BLEND, not the sub-scores) — so a builtin component reads its own column
+    # (formula_or_id = id) and any formula component reads catalogue variables. Empty for the
+    # all-formula risk composites (supplyRisk / performanceRisk).
+    builtin_by_sid = {}
+    if any(c.get("builtin") for c in candidate["components"]):
+        builtin_ids = [c["id"] for c in candidate["components"] if c.get("builtin")]
+        frame = sens.score_frame(purchases, suppliers, metrics)
+        builtin_by_sid = {
+            str(r["supplier_id"]): {bid: float(r[bid]) for bid in builtin_ids}
+            for _, r in frame.iterrows()
+        }
     out = []
     for sid, key_values in rows:
+        # An unscored supplier (no POs in the window) has no sub-scores to blend — skip it when
+        # the candidate needs builtin columns. All 55 range suppliers are scored, so this is
+        # defensive rather than live.
+        if builtin_by_sid and str(sid) not in builtin_by_sid:
+            continue
         env = risk_config.resolve_env(referenced, key_values, computed_maps)
+        env.update(builtin_by_sid.get(str(sid), {}))
         comps, total = [], 0.0
         for c in enabled:
             b = c.get("bounds", {"lo": 0.0, "hi": 100.0})
-            raw = formula_eval.evaluate_formula(c["formula"], env)
+            formula_or_id = c.get("formula") or c["id"]  # builtin -> its own injected column
+            raw = formula_eval.evaluate_formula(formula_or_id, env)
             norm = formula_eval.normalize_to_bounds(raw, b["lo"], b["hi"])
             contrib = weights[c["id"]] * norm
             total += contrib
@@ -87,7 +107,8 @@ def preview_rows(candidate, suppliers, purchases):
 
 def impact_of(candidate, suppliers, purchases, metrics, lsm):
     """Label churn vs the live config. Patches get_composite to the candidate for the recompute,
-    then restores it. supplyRisk -> Kraljic quadrant; performanceRisk -> performance zone."""
+    then restores it. supplyRisk -> Kraljic quadrant; performanceRisk OR performanceComposite ->
+    performance zone (a composite-blend change moves performance zones, not Kraljic quadrants)."""
     cid = candidate["id"]
     real = risk_config.get_composite
 
@@ -128,7 +149,7 @@ def main():
             start, end = _range_bounds(conn)
             suppliers, purchases, metrics = sens.setup_window(conn, start, end)
             lsm = sens.log_spend_map(purchases)
-            result = {"perSupplier": preview_rows(candidate, suppliers, purchases),
+            result = {"perSupplier": preview_rows(candidate, suppliers, purchases, metrics),
                       "impact": impact_of(candidate, suppliers, purchases, metrics, lsm)}
         finally:
             conn.close()

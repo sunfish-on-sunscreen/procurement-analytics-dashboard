@@ -204,6 +204,37 @@ check("non-builtin variable ALLOWED in performanceRisk",
   builtinInputBlockedIn(vars.cycle_time, "performanceRisk", RISK_MODEL.composites) === null);
 check("risk_score-input variable ALLOWED in performanceRisk (its own output)",
   builtinInputBlockedIn(vars.roster_concentration, "performanceRisk", RISK_MODEL.composites) === null);
+// DIRECT SIBLING case (performanceComposite prerequisite): a builtin-input variable is blocked
+// where the builtin it feeds sits directly alongside it in performanceComposite. Note the
+// contrast — roster_concentration feeds risk_score, ALLOWED in performanceRisk (its own output)
+// but BLOCKED in performanceComposite (risk_score is a sibling component there).
+check("builtin-input variable BLOCKED in performanceComposite (direct sibling)",
+  builtinInputBlockedIn(vars.on_time_rate, "performanceComposite", RISK_MODEL.composites) !== null);
+check("risk_score-input variable BLOCKED in performanceComposite (risk_score is a sibling there)",
+  builtinInputBlockedIn(vars.roster_concentration, "performanceComposite", RISK_MODEL.composites) !== null);
+check("non-feeding variable ALLOWED in performanceComposite",
+  builtinInputBlockedIn(vars.cycle_time, "performanceComposite", RISK_MODEL.composites) === null);
+
+// The performanceComposite prerequisite: ADDING a (formula) component moves its fingerprint,
+// exactly as on a risk composite — the compute-affecting projection already covers every
+// component (no fingerprint-logic change was needed to enable this).
+const addPC = mergeAndBumpVersions(RISK_MODEL, [
+  {
+    id: "performanceComposite",
+    components: [
+      { id: "quality_score", enabled: true, weight: 0.25 },
+      { id: "delivery_score", enabled: true, weight: 0.25 },
+      { id: "process_score", enabled: true, weight: 0.22 },
+      { id: "risk_score", enabled: true, weight: 0.18 },
+      { id: "custom_costfit", enabled: true, weight: 0.1, formula: "cost_premium", bounds: { lo: 0, hi: 100 }, label: "Cost fit" },
+    ],
+  },
+]);
+check("ADD a component to performanceComposite appends alongside the four builtins",
+  composite(addPC.merged, "performanceComposite").components.length === 5 &&
+    composite(addPC.merged, "performanceComposite").components.some((c) => c.id === "custom_costfit"));
+check("ADD a component to performanceComposite moves its fingerprint",
+  kfp("performanceComposite", addPC.merged) !== EXPECT_COMPOSITE_FP.performanceComposite && cfp(addPC.merged) !== base);
 
 // M. Stage F formula-save backend: mergeAndBumpVersions applies a formula edit + bumps the
 //    version + moves the fingerprint, ignores a formula on a BUILTIN, and formulaError/boundsError

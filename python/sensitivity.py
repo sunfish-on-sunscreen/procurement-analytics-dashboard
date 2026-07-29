@@ -91,10 +91,11 @@ def supply_risk_map(purchases, suppliers, metrics):
     return risk_map
 
 
-def window_metrics(purchases, suppliers, metrics):
-    """Per-supplier scored frame via the REAL scores.build_window_metrics (reads the
-    live/patched performanceRisk + performanceComposite config). Returns {sid:
-    (risk_score, composite_score)}."""
+def score_frame(purchases, suppliers, metrics):
+    """The FULL per-supplier scored DataFrame via the REAL scores.build_window_metrics (reads the
+    live/patched performanceRisk + performanceComposite config). window_metrics slices this to
+    (risk_score, composite_score); preview.py reads its builtin sub-score COLUMNS to inject into a
+    performanceComposite candidate's env. ONE frame-building path — no drift between the two."""
     pur = scores.rename_purchase_columns(purchases)
     country_by_sid = (
         suppliers.rename(columns={"externalId": "supplierExternalId"})
@@ -107,10 +108,15 @@ def window_metrics(purchases, suppliers, metrics):
             ["supplier_id", "supplier_name", "category"]].copy()
     )
     soft["country"] = soft["supplier_id"].map(country_by_sid).fillna("")
-    wm = scores.build_window_metrics(soft, pur, ca._ROSTER_CAT_COUNTS or {})
+    return scores.build_window_metrics(soft, pur, ca._ROSTER_CAT_COUNTS or {})
+
+
+def window_metrics(purchases, suppliers, metrics):
+    """Per-supplier {sid: (risk_score, composite_score)} — the (risk, composite) slice of the
+    full score_frame (reads the live/patched performanceRisk + performanceComposite config)."""
     return {
         str(r["supplier_id"]): (float(r["risk_score"]), float(r["composite_score"]))
-        for _, r in wm.iterrows()
+        for _, r in score_frame(purchases, suppliers, metrics).iterrows()
     }
 
 

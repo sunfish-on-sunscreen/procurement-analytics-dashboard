@@ -205,17 +205,27 @@ def validate_variables(model):
 
 
 def validate_builtin_input_block(model):
-    """Stage E structural double-count guard, DERIVED from the dependency graph (never
-    hardcoded). A variable declares `feedsBuiltin` = the builtin sub-score it is an input
-    to (defect/complaint -> quality_score, on-time/lead -> delivery_score, 3-way-match ->
-    process_score). A composite that PRODUCES a builtin sub-score (via a component's
-    `configuredIn`, e.g. performanceRisk -> risk_score) must NOT reference a variable that
-    feeds a SIBLING builtin of what it produces: that field would enter the parent composite
-    (performanceComposite) twice at different weights, multiplying rather than adding — the
-    Stage-1 hazard one level deeper. A variable feeding the composite's OWN produced builtin
-    is fine (that is the definition, not a duplicate). supplyRisk produces no builtin, so it
-    is never blocked (its note is a UI concern, not an arithmetic error). Rejected at LOAD so
-    a hand-edited config cannot smuggle a double-count past the settings-UI block."""
+    """Structural double-count guard, DERIVED from the dependency graph (never hardcoded). A
+    variable declares `feedsBuiltin` = the builtin sub-score it is an input to (defect/complaint
+    -> quality_score, on-time/lead -> delivery_score, 3-way-match -> process_score). A FORMULA
+    component must not reference such a variable when the builtin it feeds would ALSO enter the
+    same final composite — which happens two ways, checked HERE as ONE forbidden set (same
+    function, not a parallel check):
+
+      DIRECT SIBLING — the fed builtin sits as a component of the SAME composite. Concretely a
+        formula component in performanceComposite referencing on_time_rate (feeds delivery_score)
+        while delivery_score is a weighted component alongside it: on_time_rate would enter at its
+        own weight AND via delivery_score's 0.30 — the most direct double-count.
+      TRANSITIVE — the composite PRODUCES a builtin (via a component's `configuredIn`, e.g.
+        performanceRisk -> risk_score); a formula here feeding a SIBLING of what it produces
+        (quality/delivery/process) enters the parent composite twice at different weights — the
+        Stage-1 multiply-not-add hazard one level deeper.
+
+    Feeding the builtin the composite PRODUCES is fine (that IS its definition, not a duplicate),
+    so `produced` is removed from the forbidden set. supplyRisk produces no builtin and contains
+    none, so its forbidden set is empty and it is never blocked (its note is a UI concern).
+    Rejected at LOAD so a hand-edited config cannot smuggle a double-count past the settings-UI
+    block."""
     variables = model.get("variables", {})
     builtins_of_parent, produced_by, parent_of_builtin = {}, {}, {}
     for composite in model["composites"]:
@@ -226,20 +236,25 @@ def validate_builtin_input_block(model):
             if comp.get("configuredIn"):
                 produced_by[comp["configuredIn"]] = comp["id"]
     for composite in model["composites"]:
-        produced = produced_by.get(composite["id"])  # e.g. performanceRisk -> "risk_score"
-        if not produced:
+        cid = composite["id"]
+        # Builtins this composite must not double-count: the ones it CONTAINS directly (direct
+        # sibling) PLUS the siblings of any builtin it PRODUCES (transitive), minus the produced
+        # one (feeding your own output is the definition).
+        forbidden = set(builtins_of_parent.get(cid, set()))
+        produced = produced_by.get(cid)  # e.g. performanceRisk -> "risk_score"
+        if produced:
+            forbidden |= builtins_of_parent.get(parent_of_builtin.get(produced), set()) - {produced}
+        if not forbidden:
             continue
-        siblings = builtins_of_parent.get(parent_of_builtin.get(produced), set())
         for comp in composite["components"]:
             if not comp.get("enabled", True) or not comp.get("formula"):
                 continue
             for ref in formula_eval.referenced_names(comp["formula"]):
                 fb = variables.get(ref, {}).get("feedsBuiltin")
-                if fb and fb != produced and fb in siblings:
+                if fb and fb in forbidden:
                     raise ValueError(
                         f"risk-model: variable {ref!r} feeds builtin {fb!r} and is BLOCKED in "
-                        f"composite {composite['id']!r} (which produces sibling builtin "
-                        f"{produced!r}) — it would enter the composite twice"
+                        f"composite {cid!r} — it would enter the composite twice"
                     )
 
 
@@ -265,11 +280,16 @@ def resolve_env(var_ids, key_values, computed_maps):
 
 
 def evaluate_composite(composite, env):
-    """Fold a composite over ONE supplier's env via each ENABLED component's FORMULA + bounds,
-    iterating in DECLARED CONFIG ORDER — float addition is not associative, so the order is part
-    of the byte-identity; do NOT reorder to a dict/set (test_evaluate_composite_order guards it).
-    Returns (score, contributions): score = combine_score(sum of weight*normalized, invert),
-    contributions = {component_id -> weight*normalized}."""
+    """Fold a composite over ONE supplier's env, iterating in DECLARED CONFIG ORDER — float
+    addition is not associative, so the order is part of the byte-identity; do NOT reorder to a
+    dict/set (test_evaluate_composite_order guards it). Each ENABLED component's value is its
+    FORMULA over env, bounded to [0,100]. A BUILTIN sub-score component (performanceComposite's
+    quality/delivery/process/risk) carries no formula: its value is the sub-score COLUMN the
+    caller injected into env under the component id (formula_or_id = id), so builtin and formula
+    components blend through THIS one path — not two. At the default (0,100) bounds
+    normalize_to_bounds is a bit-exact x1.0 identity, so a builtin blends bit-for-bit as the old
+    sum(m[col]*weight). Returns (score, contributions): score = combine_score(sum of
+    weight*normalized, invert), contributions = {component_id -> weight*normalized}."""
     weights = resolve_effective_weights(composite)
     invert = invert_polarity(composite)
     total = 0.0
@@ -279,8 +299,9 @@ def evaluate_composite(composite, env):
             continue
         cid = comp["id"]
         bounds = comp.get("bounds", {"lo": 0.0, "hi": 100.0})
+        formula_or_id = comp.get("formula") or cid  # builtin -> read its own injected column
         value = formula_eval.normalize_to_bounds(
-            formula_eval.evaluate_formula(comp["formula"], env),
+            formula_eval.evaluate_formula(formula_or_id, env),
             bounds["lo"],
             bounds["hi"],
         )

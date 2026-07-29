@@ -311,6 +311,28 @@ def test_builtin_input_block():
             c["components"][0]["formula"] = "supply_concentration + on_time_rate"
     risk_config.validate_builtin_input_block(m2)
 
+    # DIRECT SIBLING case (the performanceComposite prerequisite): a FORMULA component added
+    # to performanceComposite that references a builtin-input variable double-counts the builtin
+    # sitting DIRECTLY alongside it — the same guard, the other case.
+    def add_pc_formula(model, formula):
+        m = copy.deepcopy(model)
+        for c in m["composites"]:
+            if c["id"] == "performanceComposite":
+                c["components"].append({
+                    "id": "custom_x", "formula": formula, "bounds": {"lo": 0, "hi": 100},
+                    "enabled": True, "weight": 0.1})
+        return m
+
+    # on_time_rate feeds delivery_score, a builtin IN performanceComposite -> BLOCKED (direct)
+    try:
+        risk_config.validate_builtin_input_block(add_pc_formula(base, "on_time_rate"))
+        assert False, "expected a DIRECT-sibling block for a builtin-input variable in performanceComposite"
+    except ValueError as e:
+        assert "BLOCKED" in str(e) and "on_time_rate" in str(e), str(e)
+
+    # cost_premium has no feedsBuiltin -> allowed as a performanceComposite formula component
+    risk_config.validate_builtin_input_block(add_pc_formula(base, "cost_premium"))
+
 
 def test_lookup_table_validation():
     # The default config's three tables are valid (load_risk_model already validated
