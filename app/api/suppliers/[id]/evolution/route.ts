@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@/lib/generated/prisma/client";
 import { getSession } from "@/lib/auth";
 import {
   getAnalysisResult,
@@ -87,16 +88,26 @@ export async function GET(
     }),
   );
 
+  // Invoice documents per order-year for this supplier, from the Invoice table
+  // (1:1 with the void-excluded PO). Keyed by EnrichedPurchase.period — the same
+  // order-year bucket the line loop uses — so each year's count is invoice-sourced.
+  const invByYearRows = await prisma.$queryRaw<{ period: string; n: number }[]>(Prisma.sql`
+    SELECT ep.period AS period, COUNT(i.id)::int AS n
+    FROM "EnrichedPurchase" ep
+    JOIN "Invoice" i ON i."poId" = ep."poId"
+    WHERE ep."supplierExternalId" = ${id}
+    GROUP BY ep.period
+  `);
+  const invoiceByYear = new Map(invByYearRows.map((r) => [r.period, r.n]));
+
   const periodsOut: SupplierEvolution["periods"] = analysesByPeriod.map(
     ({ period, abc, kraljic, perf }) => {
       // Order-year membership: the line's own `period` (== PurchaseOrder.period).
       const inPeriod = lines.filter((l) => l.period === period.name);
       let spend = 0;
-      const poIds = new Set<string>();
       const itemMap = new Map<string, { spend: number; pos: Set<string> }>();
       for (const l of inPeriod) {
         spend += l.lineValueUsd;
-        poIds.add(l.poId);
         const cur = itemMap.get(l.itemName) ?? { spend: 0, pos: new Set<string>() };
         cur.spend += l.lineValueUsd;
         cur.pos.add(l.poId);
@@ -111,7 +122,7 @@ export async function GET(
         year: period.name,
         periodLabel: period.name,
         spend,
-        invoiceCount: poIds.size,
+        invoiceCount: invoiceByYear.get(period.name) ?? 0,
         abcClass:
           abc?.classifications.find((c) => c.supplier_id === id)?.abc_class ??
           null,

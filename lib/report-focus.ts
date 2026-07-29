@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@/lib/generated/prisma/client";
 import {
   getAnalysisResult,
   type AbcResult,
@@ -82,6 +83,18 @@ export async function assembleSupplierFocus(
     }),
   );
 
+  // Invoice documents per order-year for this supplier, from the Invoice table
+  // (1:1 with the void-excluded PO) — the invoice-sourced count for the brief's
+  // trajectory table. Keyed by EnrichedPurchase.period, matching the line bucket.
+  const invByYearRows = await prisma.$queryRaw<{ period: string; n: number }[]>(Prisma.sql`
+    SELECT ep.period AS period, COUNT(i.id)::int AS n
+    FROM "EnrichedPurchase" ep
+    JOIN "Invoice" i ON i."poId" = ep."poId"
+    WHERE ep."supplierExternalId" = ${supplierId}
+    GROUP BY ep.period
+  `);
+  const invoiceByYear = new Map(invByYearRows.map((r) => [r.period, r.n]));
+
   const trajectory = analysesByPeriod.map(({ period, abc, kraljic, perf }) => {
     // Order-year membership: the line's own `period` (== PurchaseOrder.period).
     const inPeriod = allLines.filter((l) => l.period === period.name);
@@ -89,7 +102,7 @@ export async function assembleSupplierFocus(
     return {
       year: period.name,
       spend,
-      invoiceCount: new Set(inPeriod.map((l) => l.poId)).size,
+      invoiceCount: invoiceByYear.get(period.name) ?? 0,
       abcClass:
         abc?.classifications.find((c) => c.supplier_id === supplierId)?.abc_class ??
         null,
