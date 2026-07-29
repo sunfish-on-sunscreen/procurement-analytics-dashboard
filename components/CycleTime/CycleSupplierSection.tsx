@@ -233,7 +233,7 @@ function BySupplier({
                 <SortHead label="POs" sortKey="po_count" active={sort.key === "po_count"} dir={sort.dir} onSort={toggle} align="right" />
                 <SortHead label="Slowest stage" sortKey="slowest_stage_label" active={sort.key === "slowest_stage_label"} dir={sort.dir} onSort={toggle} defaultDir="asc" width="w-[150px]" />
                 <SortHead label="ABC" sortKey="abc_class" active={sort.key === "abc_class"} dir={sort.dir} onSort={toggle} align="center" defaultDir="asc" width="w-[64px]" />
-                <SortHead label="Exposure" sortKey="kraljic_quadrant" active={sort.key === "kraljic_quadrant"} dir={sort.dir} onSort={toggle} align="center" defaultDir="asc" width="w-[120px]" />
+                <SortHead label="Kraljic quadrant" sortKey="kraljic_quadrant" active={sort.key === "kraljic_quadrant"} dir={sort.dir} onSort={toggle} align="center" defaultDir="asc" width="w-[120px]" />
                 <SortHead label="Performance" sortKey="composite" active={sort.key === "composite"} dir={sort.dir} onSort={toggle} align="right" width="w-[140px]" />
                 <TableHead className="w-[220px]">Anomalies</TableHead>
               </TableRow>

@@ -23,8 +23,8 @@ export const CATEGORY_ORDER: RecommendationCategory[] = [
 
 export const CATEGORY_LABEL: Record<RecommendationCategory, string> = {
   critical_issues_engagement: "Critical Issues",
-  bottleneck_risk: "Bottleneck Risk Mitigation",
-  hidden_gems_promotion: "Hidden Gems Promotion",
+  bottleneck_risk: "Bottleneck Risk",
+  hidden_gems_promotion: "Hidden Gems",
   process_improvement: "Process Improvement",
   concentration: "Concentration",
   critical_spend: "Critical Spend",

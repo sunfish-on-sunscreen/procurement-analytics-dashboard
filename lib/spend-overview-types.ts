@@ -56,10 +56,12 @@ export type SpendDetail = {
   };
   stats: {
     totalSpend: number;
-    poCount: number;
+    // Invoice documents over the span (1:1 with the void-excluded PO, so equal to
+    // the PO count but sourced from the Invoice table to match the panel labels).
+    invoiceCount: number;
     earliestDate: string | null;
     latestDate: string | null;
-    avgPoValue: number;
+    avgInvoiceValue: number;
     // Period-scoped portfolio context for the Spend insights cards. `rank` is the
     // 1-based position by spend among active suppliers (null when absent);
     // `percentOfTotal` is this supplier's share of period spend; `activeSupplierCount`
@@ -68,7 +70,9 @@ export type SpendDetail = {
     percentOfTotal: number | null;
     activeSupplierCount: number;
   };
-  byItem: { itemName: string; poCount: number; totalSpend: number }[];
+  // invoiceCount = distinct invoices including the item. Under the 1:1 PO↔Invoice
+  // this equals the distinct-PO count the route computes from the item's lines.
+  byItem: { itemName: string; invoiceCount: number; totalSpend: number }[];
   pos: {
     poId: string;
     itemName: string;

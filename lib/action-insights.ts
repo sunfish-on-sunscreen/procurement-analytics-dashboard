@@ -159,7 +159,7 @@ function concentration(ctx: InsightCtx): InsightModel | null {
       { label: "Supplier" },
       { label: "Spend", align: "right" },
       { label: "Performance", align: "right" },
-      { label: "Exposure", align: "center" },
+      { label: "Kraljic quadrant", align: "center" },
     ],
     rows: inCat.map((s) => ({
       supplierId: s.id,
@@ -267,7 +267,7 @@ function criticalIssues(ctx: InsightCtx): InsightModel | null {
       { label: "Supplier" },
       { label: "Spend", align: "right" },
       { label: "Performance", align: "right" },
-      { label: "Exposure", align: "center" },
+      { label: "Kraljic quadrant", align: "center" },
     ],
     rows: inZone.map((s) => ({
       supplierId: s.id,
@@ -306,7 +306,7 @@ function hiddenGems(ctx: InsightCtx): InsightModel | null {
       { label: "Supplier" },
       { label: "Performance", align: "right" },
       { label: "Spend", align: "right" },
-      { label: "Exposure", align: "center" },
+      { label: "Kraljic quadrant", align: "center" },
     ],
     rows: inZone.map((s) => ({
       supplierId: s.id,
@@ -388,7 +388,7 @@ function tailSpend(ctx: InsightCtx): InsightModel | null {
     columns: [
       { label: "Supplier" },
       { label: "Spend", align: "right" },
-      { label: "Exposure", align: "center" },
+      { label: "Kraljic quadrant", align: "center" },
     ],
     rows: tail.map((s) => ({
       supplierId: s.id,
@@ -574,7 +574,7 @@ function processFamily(ctx: InsightCtx): InsightModel | null {
       { label: "Supplier" },
       { label: "Anomalies" },
       { label: "ABC", align: "center" },
-      { label: "Exposure", align: "center" },
+      { label: "Kraljic quadrant", align: "center" },
       { label: "Spend", align: "right" },
     ],
     rows: rows.map((r) => ({

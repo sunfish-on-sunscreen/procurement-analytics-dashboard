@@ -63,13 +63,13 @@ function SpendByItemChart({ detail }: { detail: SpendDetail }) {
     name: truncate(it.itemName, 22),
     full: it.itemName,
     value: it.totalSpend,
-    count: it.poCount,
-    avg: it.poCount > 0 ? it.totalSpend / it.poCount : 0,
+    count: it.invoiceCount,
+    avg: it.invoiceCount > 0 ? it.totalSpend / it.invoiceCount : 0,
     pct: (it.totalSpend / total) * 100,
   }));
   if (rest.length) {
     const spend = rest.reduce((s, r) => s + r.totalSpend, 0);
-    const count = rest.reduce((s, r) => s + r.poCount, 0);
+    const count = rest.reduce((s, r) => s + r.invoiceCount, 0);
     data.push({ name: `Others (${rest.length})`, full: `${rest.length} more items`, value: spend, count, avg: count ? spend / count : 0, pct: (spend / total) * 100 });
   }
   const cum = detail.byItem.slice(0, 5).reduce((s, r) => s + r.totalSpend, 0);
@@ -145,7 +145,7 @@ function ItemTable({ detail }: { detail: SpendDetail }) {
       <tbody>
         {detail.byItem.map((it) => (
           <tr key={it.itemName} className="border-b">
-            <td className="py-1.5 text-right text-muted-foreground">{it.poCount}</td>
+            <td className="py-1.5 text-right text-muted-foreground">{it.invoiceCount}</td>
             <td className="py-1.5">{it.itemName}</td>
             <td className="py-1.5 text-right">{usd0.format(it.totalSpend)}</td>
           </tr>
@@ -421,7 +421,7 @@ export function SpendDetailBody({
   const s = detail?.supplier;
   const st = detail?.stats;
   // No purchases in the selected period — render an honest "absent" view.
-  const absent = st != null && st.poCount === 0;
+  const absent = st != null && st.invoiceCount === 0;
 
   return (
     <>
@@ -439,8 +439,8 @@ export function SpendDetailBody({
               <h4 className="mb-2 text-sm font-medium text-muted-foreground">Spend at a glance</h4>
               <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
                 <StatBlock label="Total spend" value={absent ? "—" : formatCompactCurrency(st.totalSpend)} />
-                <StatBlock label="Invoices" value={absent ? "—" : String(st.poCount)} />
-                <StatBlock label="Avg invoice" value={absent ? "—" : formatCompactCurrency(st.avgPoValue)} />
+                <StatBlock label="Invoices" value={absent ? "—" : String(st.invoiceCount)} />
+                <StatBlock label="Avg invoice" value={absent ? "—" : formatCompactCurrency(st.avgInvoiceValue)} />
                 <StatBlock
                   label="Performance"
                   value={

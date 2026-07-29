@@ -118,6 +118,20 @@ export async function GET(
     getPoLines({ supplierExternalId: id, ...span }),
   ]);
 
+  // Invoice-document count for this supplier's in-span (void-excluded) POs. Invoice
+  // is 1:1 with the PO (verified), so this equals purchases.length — but sourcing it
+  // from the Invoice table makes the panel's "Invoices" / "Avg invoice" honest.
+  const invSpanCond = dateFilter
+    ? Prisma.sql`AND ep."poDate" >= ${dateFilter.gte} AND ep."poDate" <= ${dateFilter.lte}`
+    : Prisma.empty;
+  const invRows = await prisma.$queryRaw<{ n: number }[]>(Prisma.sql`
+    SELECT COUNT(i.id)::int AS n
+    FROM "EnrichedPurchase" ep
+    JOIN "Invoice" i ON i."poId" = ep."poId"
+    WHERE ep."supplierExternalId" = ${id} ${invSpanCond}
+  `);
+  const invoiceCount = invRows[0]?.n ?? 0;
+
   // Dominant (highest-value) line per PO → the representative item label the
   // per-PO "All invoices" table + chart show (a PO can now hold several lines).
   const dominantByPo = new Map<string, { itemName: string; unit: string; value: number }>();
@@ -179,7 +193,8 @@ export async function GET(
   }
 
   // Spend-by-item over the supplier's LINES (line-grain, lock C): spend = Σ line
-  // value; poCount = number of DISTINCT POs that include the item.
+  // value; invoiceCount = number of DISTINCT POs that include the item — which,
+  // under the 1:1 PO↔Invoice, is the count of distinct invoices including it.
   const byItemMap = new Map<string, { pos: Set<string>; totalSpend: number }>();
   for (const l of lines) {
     const cur = byItemMap.get(l.itemName) ?? { pos: new Set<string>(), totalSpend: 0 };
@@ -188,7 +203,7 @@ export async function GET(
     byItemMap.set(l.itemName, cur);
   }
   const byItem = [...byItemMap.entries()]
-    .map(([itemName, v]) => ({ itemName, poCount: v.pos.size, totalSpend: v.totalSpend }))
+    .map(([itemName, v]) => ({ itemName, invoiceCount: v.pos.size, totalSpend: v.totalSpend }))
     .sort((a, b) => b.totalSpend - a.totalSpend);
 
   // One row per PO (= per invoice) for the "All invoices" tab; the item column
@@ -319,10 +334,10 @@ export async function GET(
     },
     stats: {
       totalSpend,
-      poCount: purchases.length,
+      invoiceCount,
       earliestDate: iso(earliest),
       latestDate: iso(latest),
-      avgPoValue: purchases.length > 0 ? totalSpend / purchases.length : 0,
+      avgInvoiceValue: invoiceCount > 0 ? totalSpend / invoiceCount : 0,
       rank,
       percentOfTotal,
       activeSupplierCount,

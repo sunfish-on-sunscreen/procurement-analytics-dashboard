@@ -623,7 +623,7 @@ export function ClassificationDetailBody({
   const evoData = evo;
   const s = detail?.supplier;
   const st = detail?.stats;
-  const absent = st != null && st.poCount === 0;
+  const absent = st != null && st.invoiceCount === 0;
   // This supplier's period-scoped Kraljic assignment (risk breakdown source).
   const myAssignment = supplierId
     ? kraljic?.quadrant_assignments.find((q) => q.supplier_id === supplierId)
