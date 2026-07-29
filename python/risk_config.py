@@ -33,6 +33,30 @@ WEIGHT_SUM_TOL = 1e-9
 # the dispatcher; this is the validator's copy so a hand-edited config fails at load.
 AGG_FUNCS = ("mean", "rate_pct", "share_ge1_pct", "defect_ratio_pct", "spend_share_pct")
 
+# Which COMPUTED-variable resolvers each composite's COMPUTE PATH builds — a CODE fact mirrored from
+# lib/risk-model.COMPUTED_RESOLVERS_BY_COMPOSITE. compute_analyses.compute_supply_risk builds the
+# cost_premium map (_cost_premium_points); scores.compute_scores (performanceRisk +
+# performanceComposite) builds NO computed maps, only lookup + aggregate. A `computed` variable is
+# resolvable ONLY where its resolver is built; a formula using it elsewhere would score to the
+# variable's default while the PREVIEW (which builds every resolver) shows the real value — the
+# single-evaluator divergence. A NEW computed variable inherits the block until its resolver is
+# registered here AND wired into that path's compute code.
+COMPUTED_RESOLVERS_BY_COMPOSITE = {
+    "supplyRisk": frozenset({"cost_premium"}),
+    "performanceRisk": frozenset(),
+    "performanceComposite": frozenset(),
+}
+
+
+def computed_variable_unresolvable_in(variable, composite_id):
+    """True when catalogue `variable` (a dict) cannot be resolved by `composite_id`'s compute path —
+    a COMPUTED variable whose resolver that path does not build. Lookup + aggregate resolve in every
+    path. Mirror of lib/risk-model.computedVariableUnresolvableIn; derived from the resolver, not the
+    variable name, so a second computed variable inherits the block automatically."""
+    if variable.get("kind") != "computed":
+        return False
+    return variable.get("resolver") not in COMPUTED_RESOLVERS_BY_COMPOSITE.get(composite_id, frozenset())
+
 
 @functools.lru_cache(maxsize=1)
 def load_risk_model(path=None):
@@ -199,6 +223,13 @@ def validate_variables(model):
                     raise ValueError(
                         f"risk-model composite '{composite['id']}' component '{comp['id']}': "
                         f"formula references LOCKED variable {ref!r}: {variables[ref]['locked']}"
+                    )
+                if computed_variable_unresolvable_in(variables[ref], composite["id"]):
+                    raise ValueError(
+                        f"risk-model composite '{composite['id']}' component '{comp['id']}': "
+                        f"computed variable {ref!r} cannot be resolved by this composite's scoring "
+                        f"path — its resolver runs elsewhere, so it would score to its default while "
+                        f"the preview shows the real value"
                     )
 
     validate_builtin_input_block(model)

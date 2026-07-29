@@ -342,6 +342,46 @@ export function builtinInputBlockedIn(
   return { producedBuiltin: produced ?? fb, feedsBuiltin: fb };
 }
 
+/**
+ * Which COMPUTED-variable resolvers each composite's COMPUTE PATH actually builds — a CODE fact
+ * (python/compute_analyses.compute_supply_risk builds cost_premium via _cost_premium_points;
+ * python/scores.compute_scores, which computes performanceRisk + performanceComposite, builds NO
+ * computed resolvers — only lookup + aggregate). A `computed` variable is resolvable ONLY in a
+ * composite whose path builds its resolver: used elsewhere the PREVIEW (which builds every resolver)
+ * would show a value the save-time compute cannot, and the saved score would silently fall to the
+ * variable's default — the single-evaluator divergence formulaError exists to prevent. A NEW
+ * computed variable inherits the block by default (its resolver is in no set here) until its
+ * resolver is wired into a compute path AND registered here. Mirrored by
+ * python/risk_config.COMPUTED_RESOLVERS_BY_COMPOSITE (kept honest by the preview/compute parity test).
+ */
+export const COMPUTED_RESOLVERS_BY_COMPOSITE: Record<string, readonly string[]> = {
+  supplyRisk: ["cost_premium"],
+  performanceRisk: [],
+  performanceComposite: [],
+};
+
+/** The composites whose compute path builds `resolver` (for the block message). Empty => nowhere. */
+function compositesResolving(resolver: string): string[] {
+  return Object.entries(COMPUTED_RESOLVERS_BY_COMPOSITE)
+    .filter(([, resolvers]) => resolvers.includes(resolver))
+    .map(([cid]) => cid);
+}
+
+/**
+ * True when `variable` cannot be resolved by `compositeId`'s compute path — a COMPUTED variable
+ * whose resolver that path does not build. Lookup + aggregate variables resolve in EVERY path, so
+ * they are never unresolvable. Derived from the resolver, not the variable name: a second computed
+ * variable is unresolvable everywhere until its resolver is registered in
+ * COMPUTED_RESOLVERS_BY_COMPOSITE.
+ */
+export function computedVariableUnresolvableIn(
+  variable: Pick<CatalogueVariable, "kind" | "resolver">,
+  compositeId: string,
+): boolean {
+  if (variable.kind !== "computed") return false;
+  return !(COMPUTED_RESOLVERS_BY_COMPOSITE[compositeId] ?? []).includes(variable.resolver ?? "");
+}
+
 /** The whitelisted formula functions (mirrors python/formula_eval.ALLOWED_FUNCS). They are
  * RESERVED — never variable ids — so any identifier that is NOT one of them is a variable. */
 const RESERVED_FORMULA_FUNCS = new Set(["min", "max", "abs", "sqrt"]);
@@ -922,6 +962,13 @@ export function formulaError(
     const v = variables[id];
     if (!v) return `Unknown variable "${id}".`;
     if (v.locked) return `"${id}" is locked: ${v.locked}`;
+    // Single-evaluator guard: a computed variable whose resolver this composite's compute path does
+    // not build would preview a real value but score to its default once saved. Reject it so the
+    // preview and the saved config cannot disagree (the same reason locked variables are rejected).
+    if (computedVariableUnresolvableIn(v, compositeId)) {
+      const homes = compositesResolving(v.resolver ?? "");
+      return `"${id}" is a computed variable ${compositeId} cannot resolve — its resolver is built only by ${homes.length ? homes.join(" / ") : "no scoring path"}, so a formula using it here would preview a real value but score to its default once saved.`;
+    }
     // The double-count block mirrors Python: enforced on ENABLED components only (a disabled
     // component reaches no score). The route passes enforceBlock = component.enabled.
     if (enforceBlock) {

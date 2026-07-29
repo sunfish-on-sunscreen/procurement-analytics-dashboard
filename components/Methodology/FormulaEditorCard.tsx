@@ -11,6 +11,7 @@ import {
   FORMULA_OPERATORS,
   boundsError,
   builtinInputBlockedIn,
+  computedVariableUnresolvableIn,
   deriveProvenance,
   formulaError,
   variableSheet,
@@ -272,7 +273,14 @@ export function FormulaEditorCard({
         <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
           {(sheets[currentSheet] ?? []).map(([id, v]) => {
             const blocked = builtinInputBlockedIn(v, compositeId, composites);
-            const reason = v.locked ? `locked: ${v.locked}` : blocked ? `blocked — feeds ${blocked.feedsBuiltin}` : null;
+            const unresolvable = computedVariableUnresolvableIn(v, compositeId);
+            const reason = v.locked
+              ? `locked: ${v.locked}`
+              : blocked
+                ? `blocked — feeds ${blocked.feedsBuiltin}`
+                : unresolvable
+                  ? "unavailable here — computed by another scoring path"
+                  : null;
             // A variable is a VALUE, so it is only insertable when a value is expected (same
             // token-sequence rule as the number literal) — this also stops "variable variable".
             const btnDisabled = !!reason || !wantsValue;

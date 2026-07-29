@@ -330,8 +330,65 @@ def test_builtin_input_block():
     except ValueError as e:
         assert "BLOCKED" in str(e) and "on_time_rate" in str(e), str(e)
 
-    # cost_premium has no feedsBuiltin -> allowed as a performanceComposite formula component
+    # cost_premium has no feedsBuiltin -> the DOUBLE-COUNT guard allows it here. Its
+    # resolver-availability block (scores.py cannot resolve a computed variable) is a SEPARATE
+    # check in validate_variables — see test_preview_save_single_evaluator.
     risk_config.validate_builtin_input_block(add_pc_formula(base, "cost_premium"))
+
+
+def test_preview_save_single_evaluator():
+    # SINGLE-EVALUATOR PROPERTY: the PREVIEW resolver and each composite's SAVE-TIME compute
+    # resolver must produce the same value for every catalogue variable, OR the variable is BLOCKED
+    # so neither runs it. Only a COMPUTED variable whose resolver a compute path does not build can
+    # diverge (the preview builds every resolver; a compute path a subset). The restriction blocks
+    # exactly those, DERIVED from the resolver — not a variable name. Pure (synthetic env), no DB.
+    import copy
+    model = risk_config.load_risk_model()
+    variables = model["variables"]
+    composite_ids = [c["id"] for c in model["composites"]]
+    unresolvable = risk_config.computed_variable_unresolvable_in
+
+    # (a) EVERY catalogue variable x EVERY composite. cost_premium (the one computed variable) is
+    #     resolvable ONLY in supplyRisk (compute_analyses builds it via _cost_premium_points);
+    #     lookup + aggregate variables resolve in every path, so are never unresolvable.
+    for vid, v in variables.items():
+        if v.get("locked"):
+            continue
+        for cid in composite_ids:
+            if v.get("kind") == "computed":
+                assert unresolvable(v, cid) == (cid != "supplyRisk"), (vid, cid)
+            else:
+                assert not unresolvable(v, cid), (vid, cid, "lookup/aggregate must resolve everywhere")
+
+    # (b) A SECOND computed variable inherits the block automatically (its resolver is unregistered)
+    #     in EVERY composite until wired — the "not a hardcoded variable name" property.
+    new_computed = {"kind": "computed", "resolver": "brand_new_resolver"}
+    for cid in composite_ids:
+        assert unresolvable(new_computed, cid), cid
+
+    # (c) The validation both the preview-gate and the save route call rejects a cost_premium formula
+    #     in a scores.py composite; the shipped config (cost_premium in supplyRisk) validates.
+    risk_config.validate_variables(model)
+    for cid in ("performanceRisk", "performanceComposite"):
+        m = copy.deepcopy(model)
+        next(c for c in m["composites"] if c["id"] == cid)["components"].append(
+            {"id": "custom_cp", "formula": "cost_premium", "bounds": {"lo": 0, "hi": 100},
+             "enabled": True, "weight": 0.1})
+        try:
+            risk_config.validate_variables(m)
+            assert False, f"expected cost_premium rejected in {cid}"
+        except ValueError as e:
+            assert "cost_premium" in str(e) and "resolve" in str(e), str(e)
+
+    # (d) THE DIVERGENCE IS REAL: resolve_env with a cost_premium map (what the PREVIEW builds) vs the
+    #     EMPTY computed_maps scores.compute_scores passes (it never builds cost_premium) gives
+    #     different values for a supplier with a real premium — the silent-0 the block prevents.
+    kv = {"supplier_id": "SX", "country": "JP", "roster_other_count": 2}
+    env_preview = risk_config.resolve_env({"cost_premium"}, kv, {"cost_premium": {"SX": 42.0}})
+    env_scores = risk_config.resolve_env({"cost_premium"}, kv, {})  # scores.py path: no cost_premium map
+    assert env_preview["cost_premium"] == 42.0
+    assert env_scores["cost_premium"] == float(variables["cost_premium"].get("default", 0.0))
+    assert env_preview["cost_premium"] != env_scores["cost_premium"]
 
 
 def test_lookup_table_validation():

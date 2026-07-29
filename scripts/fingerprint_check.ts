@@ -27,6 +27,7 @@ import {
   referencedVariables,
   componentTableRefs,
   builtinInputBlockedIn,
+  computedVariableUnresolvableIn,
   mergeAndBumpVersions,
   formulaError,
   boundsError,
@@ -264,6 +265,23 @@ check("formulaError flags an unknown variable",
 check("formulaError flags a locked variable",
   formulaError("supply_concentration + cycle_time_cv", "supplyRisk", RISK_MODEL.composites, vars) !== null);
 check("boundsError flags hi <= lo", boundsError({ lo: 100, hi: 0 }) !== null && boundsError({ lo: 0, hi: 100 }) === null);
+
+// M.1 Single-evaluator guard: a COMPUTED variable is rejected in a composite whose compute path
+//     does not build its resolver (scores.py builds none; compute_analyses builds cost_premium),
+//     so the preview cannot show a value the save then scores to 0. Derived from the resolver, not
+//     the variable name — lookup/aggregate resolve everywhere. Mirrors python/risk_config.
+check("formulaError blocks cost_premium in performanceComposite (unresolvable computed)",
+  formulaError("cost_premium", "performanceComposite", RISK_MODEL.composites, vars) !== null);
+check("formulaError blocks cost_premium in performanceRisk (unresolvable computed)",
+  formulaError("cost_premium", "performanceRisk", RISK_MODEL.composites, vars) !== null);
+check("formulaError ALLOWS cost_premium in supplyRisk (its resolver's home)",
+  formulaError("cost_premium", "supplyRisk", RISK_MODEL.composites, vars) === null);
+check("formulaError ALLOWS a lookup variable in performanceComposite (resolves in every path)",
+  formulaError("import_friction", "performanceComposite", RISK_MODEL.composites, vars) === null);
+check("computedVariableUnresolvableIn: computed blocked off its path, lookup never blocked",
+  computedVariableUnresolvableIn(vars.cost_premium, "performanceComposite") &&
+    !computedVariableUnresolvableIn(vars.cost_premium, "supplyRisk") &&
+    !computedVariableUnresolvableIn(vars.import_friction, "performanceComposite"));
 
 // N. Stage G: a cost_premium partition-parameter edit moves the fingerprint (compute-affecting).
 const partEdit = clone(RISK_MODEL);
